@@ -1,5 +1,7 @@
 # autorcode — 모델 라우팅 + 도구 실행 하네스 (ollama 스타일)
 
+[![test](https://github.com/jicine1360-prog/autorcode/actions/workflows/test.yml/badge.svg)](https://github.com/jicine1360-prog/autorcode/actions/workflows/test.yml)
+
 > ⚠️ **학습용/프로토타입 하네스입니다 — 보안 경계가 아닙니다.**
 > - bash는 화이트리스트·차단패턴·RLIMIT으로 방어하지만, 새로운 우회 수단이 나오면 뚫린다.
 >   자격증명(.ssh/.aws 등) 접근은 필터링하지만 **이건 억지력이지 보장이 아니다.**
