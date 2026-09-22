@@ -2,6 +2,11 @@
 
 [![test](https://github.com/jicine1360-prog/autorcode/actions/workflows/test.yml/badge.svg)](https://github.com/jicine1360-prog/autorcode/actions/workflows/test.yml)
 
+<p align="center">
+  <img src="docs/demo.gif" alt="autorcode 데모 — 진행표시, 도구 실행, 파일 저장" width="800">
+  <br><i>autorcode 데모 — 진행 표시 → 도구 실행(파일 목록) → 파일 저장 (실제 실행 녹화)</i>
+</p>
+
 > ⚠️ **학습용/프로토타입 하네스입니다 — 보안 경계가 아닙니다.**
 > - bash는 화이트리스트·차단패턴·RLIMIT으로 방어하지만, 새로운 우회 수단이 나오면 뚫린다.
 >   자격증명(.ssh/.aws 등) 접근은 필터링하지만 **이건 억지력이지 보장이 아니다.**
