@@ -103,6 +103,14 @@ class Agent:
         return None
 
     # ---------- 스텝 실행 ----------
+    def _show(self, text: str) -> None:
+        if self.cfg.show_steps:
+            print(text, flush=True)
+
+    def _brief(self, obs: str) -> str:
+        line = next((l for l in obs.splitlines() if l.strip() and not l.startswith("[exit=")), obs)
+        return line.strip()[:70]
+
     def _run_one(self, name: str, args: dict) -> str:
         cfg = self.cfg
         err = self._gate(name, args if isinstance(args, dict) else {})
@@ -114,6 +122,8 @@ class Agent:
     def _run_action(self, action: dict) -> str:
         if "actions" in action:
             batch = [a for a in action["actions"] if isinstance(a, dict)][:self.cfg.max_actions]
+            for a in batch:  # 병렬 선언도 사용자에겐 보여준다
+                self._show(f"  ├ {a.get('tool')} {json.dumps(a.get('args') or {}, ensure_ascii=False)[:90]}")
             with ThreadPoolExecutor(max_workers=len(batch) or 1) as ex:
                 futs = [ex.submit(self._run_one, str(a.get("tool", "")), a.get("args") or {})
                         for a in batch]
@@ -166,7 +176,10 @@ class Agent:
             for n in ([name] if "tool" in action else [a.get("tool", "?") for a in action.get("actions", [])]):
                 stats["tools"][n] = stats["tools"].get(n, 0) + 1
             log.info("step %d: %s", step, json.dumps(action, ensure_ascii=False)[:200])
+            if "tool" in action:
+                self._show(f"[{step}] {name} {json.dumps(action.get('args') or {}, ensure_ascii=False)[:90]}")
             obs = self._run_action(action)
+            self._show(f"  └→ {self._brief(obs)}")
             self.mem.add("user", f"[도구 결과] →\n<untrusted>\n{obs[:cfg.max_output]}\n</untrusted>", stats)
 
         out = (f"[중단] 최대 스텝({cfg.max_iterations}) 초과 — 진행상황은 {cfg.log_file} 확인"

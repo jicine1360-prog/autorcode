@@ -65,6 +65,7 @@ HELP_TEXT = """autorcode — 모델 라우팅 + 도구 실행 에이전트 (open
   autorcode run phi4 "지시"         모델 지정 단발 실행
   autorcode run phi4                그 모델로 REPL
   autorcode run phi4 --yes          승인 자동 (화이트리스트는 유지)
+  autorcode run phi4 --quiet        과정 출력 끄기 (기본: 스텝마다 실시간 표시)
   autorcode run phi4 --session h.jsonl   히스토리 저장/재개
   autorcode chat phi4               도구 없는 단순 채팅
   autorcode doctor                  서버/메모리/GPU 자가진단
@@ -145,6 +146,8 @@ def _make_cfg(model: str, rest) -> config.Config:
     cfg.model_smart = model
     if rest.yes:
         cfg.auto_yes = True
+    if getattr(rest, "quiet", False):
+        cfg.show_steps = False
     if rest.session:
         cfg.session_file = rest.session
     return cfg
@@ -227,6 +230,7 @@ def main() -> int:
     p.add_argument("model", nargs="?", default="", help="ollama 모델명 (생략 시 로드/목록 우선)")
     p.add_argument("prompt", nargs="*", help="한 번 실행할 지시")
     p.add_argument("--yes", action="store_true", help="승인 자동")
+    p.add_argument("--quiet", action="store_true", help="과정 출력 끔 (결과만)")
     p.add_argument("--session", help="히스토리 jsonl")
     p.set_defaults(fn=cmd_run)
 

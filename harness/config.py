@@ -38,6 +38,7 @@ class Config:
     # --- 권한: yolo | balanced | strict ---
     permissions_mode: str = os.getenv("AGENT_PERMS", "balanced")
     auto_yes: bool = False  # CLI --yes
+    show_steps: bool = os.getenv("AGENT_SHOW_STEPS", "1") == "1"  # 과정 실시간 출력
 
     # --- 프로세스 리소스 한도(비특권 하네스) ---
     rlimit_cpu: int = int(os.getenv("AGENT_RLIMIT_CPU", "60"))

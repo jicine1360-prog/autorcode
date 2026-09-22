@@ -130,7 +130,7 @@ class TestAgentLoop(unittest.TestCase):
         cfg.base_url = f"http://127.0.0.1:{self.port}/v1"
         cfg.api_key = "t"; cfg.model_fast = cfg.model_smart = "m"
         cfg.api_retries = 1; cfg.max_iterations = 5
-        cfg.permissions_mode = "balanced"
+        cfg.permissions_mode = "balanced"; cfg.show_steps = False
         for k, v in kw.items():
             setattr(cfg, k, v)
         return cfg
@@ -171,6 +171,7 @@ class TestSession(unittest.TestCase):
             sess = os.path.join(d, "s.jsonl")
             cfg = config.load()                       # mock (base_url 없음)
             cfg.session_file = sess
+            cfg.show_steps = False
             a1 = Agent(cfg)
             out = a1.run("test.txt 파일에 생성 해줘")   # mock: write_file 1턴
             self.assertIn("완료", out)
