@@ -220,7 +220,8 @@ class TestWebTools(unittest.TestCase):
             self.assertIn(name, tools.TOOLS)
             self.assertIn(name, tools.SCHEMAS)
         r = tools.execute("youtube", {"url": "not-youtube.com/x"}, ROOT, 8000, 5)
-        self.assertIn("youtube URL", r)
+        # 환경 따라 먼저 걸리는 지점이 다름: yt-dlp 유무
+        self.assertTrue("youtube URL" in r or "yt-dlp 미설치" in r, r)
 
 
 if __name__ == "__main__":
