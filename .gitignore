@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+agent.log
+*.jsonl
+test.txt
+hello.txt
+.env
+.venv/

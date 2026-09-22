@@ -1,0 +1,15 @@
+[project]
+name = "autorcode"
+version = "2.1.0"
+description = "모델 라우팅 + 도구 실행 하네스 — ollama 스타일 로컬 에이전트 CLI (autorcode)"
+requires-python = ">=3.9"
+
+[project.scripts]
+autorcode = "harness.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["harness"]
