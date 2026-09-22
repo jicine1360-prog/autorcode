@@ -239,6 +239,8 @@ def main() -> int:
     p.set_defaults(fn=cmd_help)
 
     args = ap.parse_args()
+    cfg = config.load()
+    config.setup_logging(getattr(args, "verbose", False))
     return args.fn(args) or 0
 
 
