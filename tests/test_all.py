@@ -184,5 +184,44 @@ class TestSession(unittest.TestCase):
             self.assertGreaterEqual(len(a2.mem.turns), len(lines))
 
 
+class TestWebTools(unittest.TestCase):
+    """오프라인 유닛 — 네트워크 없이 가드/파서만 검증."""
+
+    def test_ssrf_guard(self):
+        from harness import webtools
+        for url in ["http://127.0.0.1:8080/x", "http://localhost/", "http://192.168.0.1/",
+                    "http://10.0.0.5/", "file:///etc/passwd", "http://169.254.169.254/meta"]:
+            with self.assertRaises(ValueError, msg=url):
+                webtools._public_host(url)
+        # 공개 호스트는 예외 없이 통과 (DNS 실패 서버여도 hostname 검사만 하므로 OK)
+        webtools._public_host("https://example.com/")
+
+    def test_html_to_text(self):
+        from harness import webtools
+        raw = b"<html><head><style>x{}</style></head><body><h1>Hi</h1>" \
+              b"<script>alert(1)</script><p>a &amp; b</p></body></html>"
+        txt = webtools._html_to_text(raw)
+        self.assertIn("Hi", txt)
+        self.assertIn("a & b", txt)
+        self.assertNotIn("alert", txt)
+        self.assertNotIn("<", txt)
+
+    def test_ddg_parser_both_layouts(self):
+        from harness import webtools
+        lite = (b'<a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fx.io%2Fa'
+                b'&rut=zz">Title1</a><td class="result-snippet">snip</td>')
+        self.assertEqual(webtools._ddg_parse(lite)[0]["url"], "https://x.io/a")
+        htmlv = b'<a class="result__a" href="https://y.dev/b">Title2</a>'
+        self.assertEqual(webtools._ddg_parse(htmlv)[0]["url"], "https://y.dev/b")
+
+    def test_registered(self):
+        from harness import tools
+        for name in ("web_search", "web_fetch", "youtube"):
+            self.assertIn(name, tools.TOOLS)
+            self.assertIn(name, tools.SCHEMAS)
+        r = tools.execute("youtube", {"url": "not-youtube.com/x"}, ROOT, 8000, 5)
+        self.assertIn("youtube URL", r)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

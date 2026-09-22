@@ -32,8 +32,11 @@ autorcode run                    # 인자 없음 → 로드된 모델 우선
 
 - **라우팅**: 요청 키워드 점수로 fast/smart, `run <model>`은 단일 모델 고정
 - **프로토콜**: A)단일도구 B)병렬도구(actions) C)done — 3단 파서+셀프리페어
+- **도구**: bash / 파일(read·write·edit·list·grep) + **web_search**(DDG, API키 불필요) /
+  **web_fetch**(웹페이지) / **youtube**(yt-dlp 메타+자막 — 영상 "보기")
 - **안전**: bash 화이트리스트 + 저술 명령 승인게이트(`AGENT_PERMS=yolo|balanced|strict`),
-  명령 차단패턴, 경로 샌드박스(cwd 기준), RLIMIT+프로세스그룹 킬
+  명령 차단패턴, 경로 샌드박스(cwd 기준), RLIMIT+프로세스그룹 킬,
+  웹 도구 SSRF 가드(사설 IP/내부 서비스 접근 거부)
 - **컨텍스트**: 토큰 추정 예산 트리밍, `max_tokens`로 CoT 폭주 차단
 
 ## 설정 (환경변수)

@@ -4,7 +4,7 @@ import os
 import subprocess
 from typing import Callable, Dict
 
-from . import safety
+from . import safety, webtools
 
 log = logging.getLogger("agent.tools")
 
@@ -201,6 +201,7 @@ TOOLS: Dict[str, ToolFn] = {
     "edit_file": _edit_file,
     "list_dir": _list_dir,
     "grep_files": _grep_files,
+    **webtools.TOOLS,
 }
 
 SCHEMAS = {
@@ -210,6 +211,7 @@ SCHEMAS = {
     "edit_file": "args: {path:str, old_string:str, new_string:str, replace_all?:bool} — 부분 치환",
     "list_dir": "args: {path?:str} — 디렉터리 목록",
     "grep_files": "args: {pattern:str, path?:str, max_matches?:int} — 정규식 내용 검색",
+    **webtools.SCHEMAS,
 }
 
 

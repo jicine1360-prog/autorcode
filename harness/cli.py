@@ -75,8 +75,10 @@ HELP_TEXT = """autorcode — 모델 라우팅 + 도구 실행 에이전트 (open
   C {"done":true,"answer":"..."}                    종료
 
 도구: bash / read_file / write_file / edit_file / list_dir / grep_files
+      web_search(웹검색·키불필요) / web_fetch(웹페이지) / youtube(메타+자막)
 격리: cwd 샌드박스 + 차단패턴(sudo rm -rf /, curl|sh, 포크폭탄…) +
-      RLIMIT(CPU/MEM/FSIZE/NPROC) + 타임아웃 시 프로세스그룹째 KILL
+      RLIMIT(CPU/MEM/FSIZE/NPROC) + 타임아웃 시 프로세스그룹째 KILL +
+      웹 도구 SSRF 가드(사설 IP·내부 포트 접근 거부)
 
 권한 모드 (AGENT_PERMS)
   balanced(기본)  읽기 화이트리스트 통과, 저술적(rm·python3·git·curl…)은 y/N 승인
