@@ -3,6 +3,7 @@
 보안: SSRF 가드(사설 IP/루프백 거부), 사이즈/타임아웃 상한, HTML→텍스트 정제.
 yt-dlp는 시스템에 설치된 바이너리만 사용하고 자막파일은 샌드박스 안에 쓴다.
 """
+import hashlib
 import html as _html
 import json
 import os
@@ -148,7 +149,7 @@ def _youtube(args, root, max_output, timeout):
         # transcript
         tmpdir = os.path.join(root, ".autorcode_tmp")
         os.makedirs(tmpdir, exist_ok=True)
-        template = os.path.join(tmpdir, "yt_" + str(abs(hash(url)))[:10] + ".%(ext)s")
+        template = os.path.join(tmpdir, "yt_" + _yt_cache_key(url) + ".%(ext)s")
         subprocess.run([ytdlp, "--skip-download", "--write-auto-subs", "--write-subs",
                         "--sub-langs", "ko,en", "-o", template, url],
                        capture_output=True, text=True, timeout=tmo)
@@ -169,6 +170,11 @@ def _youtube(args, root, max_output, timeout):
         return f"[오류] {tmo}초 타임아웃 — 유튜브 추출 실패"
     except Exception as e:
         return f"[오류] {type(e).__name__}: {e}"
+
+
+def _yt_cache_key(url: str) -> str:
+    """프로세스 무관하게 안정적인 유튜브 캐시 파일명 (python hash()는 실행마다 달라짐)"""
+    return hashlib.sha1(url.encode("utf-8")).hexdigest()[:12]
 
 
 def cleanup_tmp(root: str) -> None:

@@ -1,6 +1,7 @@
 """도구 레지스트리 + 실행기. 모든 출력은 상한으로 잘리고, 오류는 예외 대신 문자열로 환류."""
 import logging
 import os
+import re
 import subprocess
 import sys
 from typing import Callable, Dict
@@ -113,19 +114,30 @@ def _edit_file(args: Args, root: str, max_output: int, timeout: int) -> str:
     path = safety.confine(str(args.get("path", "")), root, for_write=True)
     old, new = str(args.get("old_string", "")), str(args.get("new_string", ""))
     all_replace = bool(args.get("replace_all"))
+    whole_word = bool(args.get("whole_word"))
     if not os.path.isfile(path):
         return f"[오류] 파일 없음: {args.get('path')}"
     if not old:
         return "[오류] old_string 필수"
     with open(path, encoding="utf-8") as f:
         text = f.read()
-    n = text.count(old)
-    if n == 0:
-        return f"[오류] old_string 없음: {old[:80]!r}"
-    if n > 1 and not all_replace:
-        return f"[오류] {n}회 일치. old_string을 더 구체적으로 쓰거나 replace_all=true"
+    if whole_word:
+        pat = re.compile(r"\b(?:" + re.escape(old) + r")\b")
+        n = len(pat.findall(text))
+        if n == 0:
+            return f"[오류] whole_word 일치 없음: {old[:80]!r}"
+        if n > 1 and not all_replace:
+            return f"[오류] {n}회 일치. old_string을 더 구체적으로 쓰거나 replace_all=true"
+        text = pat.sub(lambda _m: new, text)
+    else:
+        n = text.count(old)
+        if n == 0:
+            return f"[오류] old_string 없음: {old[:80]!r}"
+        if n > 1 and not all_replace:
+            return f"[오류] {n}회 일치. old_string을 더 구체적으로 쓰거나 replace_all=true"
+        text = text.replace(old, new)
     with open(path, "w", encoding="utf-8") as f:
-        f.write(text.replace(old, new))
+        f.write(text)
     return f"수정됨: {path} ({n}곳 치환)"
 
 
@@ -187,7 +199,7 @@ SCHEMAS = {
     "bash": "args: {command:str} — 샌드박스 셸 실행(차단패턴/타임아웃 적용)",
     "read_file": "args: {path:str, max_lines?:int} — 번호 매긴 파일 읽기",
     "write_file": "args: {path:str, content:str} — 파일 생성/전체 저장",
-    "edit_file": "args: {path:str, old_string:str, new_string:str, replace_all?:bool} — 부분 치환",
+    "edit_file": "args: {path:str, old_string:str, new_string:str, replace_all?:bool, whole_word?:bool} — 부분 치환 (whole_word=true면 단어 단위만)",
     "list_dir": "args: {path?:str} — 디렉터리 목록",
     "grep_files": "args: {pattern:str, path?:str, max_matches?:int} — 정규식 내용 검색",
     **webtools.SCHEMAS,
