@@ -94,7 +94,7 @@ class TestToolsSandbox(unittest.TestCase):
         self.assertIn("ok", r)
 
     def test_grep_list(self):
-        r = tools.execute("grep_files", {"pattern": "RLIMIT", "path": "harness",
+        r = tools.execute("grep_files", {"pattern": "process_runner", "path": "harness",
                                          "max_matches": 5}, ROOT, 8000, 10)
         self.assertIn("tools.py", r)
         r = tools.execute("list_dir", {"path": "."}, ROOT, 8000, 10)

@@ -154,8 +154,8 @@ def _grep_files(args: Args, root: str, max_output: int, timeout: int) -> str:
         return f"[오류] 정규식 실패: {e}"
     hits, files = [], 0
     for dirpath, dirnames, filenames in os.walk(base):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
-        for fn in filenames:
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
+        for fn in sorted(filenames):
             fp = os.path.join(dirpath, fn)
             try:
                 if os.path.getsize(fp) > 2_000_000:
