@@ -1,4 +1,6 @@
-# autorcode — 모델 라우팅 + 도구 실행 하네스 (ollama 스타일)
+# autorcode — 내 서버가 일하는 LLM 에이전트 CLI
+
+> 로컬(Ollama)·클라우드(OpenRouter) 모델을 fast·smart 티어로 자동 라우팅하고, 도구(웹/유튜브/bash/파일)를 샌드박스로 실행하면서 진행 상황을 실시간으로 보여주는 에이전트.
 
 [![test](https://github.com/jicine1360-prog/autorcode/actions/workflows/test.yml/badge.svg)](https://github.com/jicine1360-prog/autorcode/actions/workflows/test.yml)
 
