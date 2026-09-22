@@ -18,7 +18,8 @@ import urllib.request
 _HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))
 
-from harness import agent_core, config, llm  # noqa: E402
+from harness import agent_core, config, llm, tools  # noqa: E402
+from harness.progress import Progress, short  # noqa: E402
 
 
 def _host() -> str:
@@ -50,8 +51,13 @@ def _loaded() -> set:
 
 def _match_model(arg: str, names: list):
     """arg가 모델 이름인지 판별 — 'phi4'면 'phi4:latest' 매칭, ':' 포함이면 통과."""
-    if any(arg == n or arg + ":latest" == n or arg in n for n in names):
-        return next(n for n in names if n == arg or n.startswith(arg + ":"))
+    if arg in names:
+        return arg
+    if arg + ":latest" in names:
+        return arg + ":latest"
+    matches = [n for n in names if n.startswith(arg + ":")]
+    if len(matches) == 1:
+        return matches[0]
     return arg if ":" in arg else None
 
 
@@ -66,9 +72,18 @@ HELP_TEXT = """autorcode — 모델 라우팅 + 도구 실행 에이전트 (open
   autorcode run phi4                그 모델로 REPL
   autorcode run phi4 --yes          승인 자동 (화이트리스트는 유지)
   autorcode run phi4 --quiet        과정 출력 끄기 (기본: 스텝마다 실시간 표시)
+  autorcode run phi4 --details      도구 결과 미리보기 확대 (3줄 → 12줄)
+  autorcode run phi4 --no-stream    SSE 미지원 서버에 일반 JSON 요청
   autorcode run phi4 --session h.jsonl   히스토리 저장/재개
   autorcode chat phi4               도구 없는 단순 채팅
   autorcode doctor                  서버/메모리/GPU 자가진단
+
+실행 과정
+  모델 요청 즉시 대기 표시 → 응답 수신량(글자 수) → 도구 실행 → 결과/시간 표시
+  터미널에서는 경과 시간 갱신, 파이프/로그에서는 5초마다 진행 상태 한 줄
+  진행은 stderr, 최종 답변은 stdout. 원시 추론이나 미완성 JSON은 표시하지 않음
+  대화 중 /status /tools /steps on|off /details on|off /help 사용 가능
+  업데이트 뒤에는 exit 후 다시 실행해야 새 기능이 적용됨
 
 도구 프로토콜 (모델의 1스텝 출력 규식)
   A {"tool":"bash","args":{"command":"ls"}}        단독
@@ -90,6 +105,7 @@ HELP_TEXT = """autorcode — 모델 라우팅 + 도구 실행 에이전트 (open
   MODEL_FAST(기본 phi4:latest) MODEL_SMART(qwen3.8:27b-hunmin-64k)
   API_TIMEOUT(120) MAX_STEPS(15) BASH_TIMEOUT(30) CONTEXT_TOKENS(20000)
   MAX_TOKENS(800) RLIMIT_MEM_MB(4096) SESSION, PERMS
+  SHOW_STEPS(1) SHOW_DETAILS(0) STREAM(1) — 0/1로 표시·스트리밍 설정
 
 유료 API 전환
   AGENT_BASE_URL=https://api.openai.com/v1 AGENT_API_KEY=sk-... \\
@@ -148,13 +164,21 @@ def _make_cfg(model: str, rest) -> config.Config:
         cfg.auto_yes = True
     if getattr(rest, "quiet", False):
         cfg.show_steps = False
+    if getattr(rest, "details", False):
+        cfg.show_details = True
+    if getattr(rest, "no_stream", False):
+        cfg.stream = False
     if rest.session:
         cfg.session_file = rest.session
     return cfg
 
 
 def cmd_run(args):
-    names = _names()
+    display = config.load()
+    progress = Progress(display.show_steps and not args.quiet,
+                        display.show_details or args.details)
+    with progress.activity("[연결] 로컬 모델 목록 확인"):
+        names = _names()
     model, prompt = args.model, list(args.prompt or [])
     if model:
         resolved = _match_model(model, names)
@@ -164,36 +188,72 @@ def cmd_run(args):
         else:
             model = resolved
     if not model:
-        pool = _loaded() | set(names)
-        model = sorted(pool, key=lambda n: (n not in _loaded(), n))[0] if pool \
+        loaded = _loaded()
+        pool = loaded | set(names)
+        model = sorted(pool, key=lambda n: (n not in loaded, n))[0] if pool \
             else config.load().model_fast
     cfg = _make_cfg(model, args)
-    agent = agent_core.Agent(cfg, confirmer=_ask)
+    agent = agent_core.Agent(cfg, confirmer=_ask, progress=progress)
     head = f"autorcode run {model}  (권한 {cfg.permissions_mode}{'/auto-yes' if cfg.auto_yes else ''})"
 
-    if prompt:
-        print(head)
-        print(agent.run(" ".join(prompt)))
-        return 0
+    try:
+        if prompt:
+            progress.event(head)
+            print(agent.run(" ".join(prompt)), flush=True)
+            return 0
 
-    print(f"=== {head} === exit 입력 시 종료")
-    while True:
-        try:
-            task = input("당신> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return 0
-        if task.lower() in ("exit", "quit", "종료", ""):
-            return 0
-        try:
-            print(f"\n{agent.run(task)}\n")
-        except llm.LLMError as e:
-            print(f"[오류] {e} — 모델 크기를 줄이거나 ollama ps로 로드 현황 확인\n")
+        print(f"=== {head} === 도구 {len(tools.TOOLS)}개 · /help 도움말 · exit 종료", flush=True)
+        while True:
+            try:
+                task = input("당신> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return 0
+            if not task:
+                continue
+            if task.lower() in ("exit", "quit", "종료"):
+                return 0
+            if repl_command(task, agent):
+                continue
+            print(f"\n{agent.run(task)}\n", flush=True)
+    finally:
+        agent.close()
+
+
+def repl_command(task, agent):
+    """로컬 명령은 모델 호출 없이 즉시 처리한다."""
+    parts = task.split()
+    command = parts[0] if parts else ""
+    if command not in ("/help", "/status", "/tools", "/steps", "/details"):
+        return False
+    if command == "/help":
+        print("/status 상태 · /tools 도구 목록 · /steps on|off 과정 표시 · "
+              "/details on|off 결과 확대 · exit 종료")
+    elif command == "/tools":
+        print(tools.schema_text())
+    elif command == "/status":
+        cfg = agent.cfg
+        print(f"모델: {cfg.model_fast} / {cfg.model_smart}\n작업 위치: {cfg.workspace_root}\n"
+              f"도구 {len(tools.TOOLS)}개 · 권한 {cfg.permissions_mode} · "
+              f"과정 {'on' if agent.progress.enabled else 'off'} · "
+              f"상세 {'on' if agent.progress.details else 'off'} · "
+              f"SSE {'on' if cfg.stream else 'off'}")
+    elif len(parts) == 2 and parts[1] in ("on", "off"):
+        value = parts[1] == "on"
+        if command == "/steps":
+            agent.cfg.show_steps = agent.progress.enabled = value
+        else:
+            agent.cfg.show_details = agent.progress.details = value
+        print(f"{command}: {parts[1]}")
+    else:
+        print(f"사용법: {command} on|off")
+    return True
 
 
 def _ask(why: str) -> bool:
     try:
-        return input(f"\n[승인?] {why}\n  y/N: ").strip().lower() in ("y", "yes", "ㄱ")
+        print(f"\n[승인?] {short(why, 400)}\n  y/N: ", end="", file=sys.stderr, flush=True)
+        return input().strip().lower() in ("y", "yes", "ㄱ")
     except EOFError:
         return False
 
@@ -227,12 +287,16 @@ def main() -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("run", help="모델 실행: autorcode run [model] [prompt]")
+    run_parser = p
     p.add_argument("model", nargs="?", default="", help="ollama 모델명 (생략 시 로드/목록 우선)")
     p.add_argument("prompt", nargs="*", help="한 번 실행할 지시")
     p.add_argument("--yes", action="store_true", help="승인 자동")
     p.add_argument("--quiet", action="store_true", help="과정 출력 끔 (결과만)")
+    p.add_argument("--details", action="store_true", help="도구 결과 미리보기 확대")
+    p.add_argument("--no-stream", action="store_true", help="SSE 대신 일반 JSON 응답 사용")
+    p.add_argument("--verbose", action="store_true", help="진단 로그 출력")
     p.add_argument("--session", help="히스토리 jsonl")
-    p.set_defaults(fn=cmd_run)
+    p.set_defaults(fn=cmd_run, cmd="run")
 
     p = sub.add_parser("list", help="로컬 모델 목록")
     p.set_defaults(fn=cmd_list)
@@ -244,9 +308,11 @@ def main() -> int:
     p = sub.add_parser("help", help="전체 치트시트")
     p.set_defaults(fn=cmd_help)
 
-    args = ap.parse_args()
-    cfg = config.load()
-    config.setup_logging(getattr(args, "verbose", False))
+    # run의 모델/프롬프트 사이에도 --details 등의 옵션을 둘 수 있다.
+    args = (run_parser.parse_intermixed_args(sys.argv[2:])
+            if sys.argv[1:2] == ["run"] else ap.parse_args())
+    if args.cmd in ("run", "chat"):
+        config.setup_logging(getattr(args, "verbose", False))
     return args.fn(args) or 0
 
 

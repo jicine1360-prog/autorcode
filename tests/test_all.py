@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -125,6 +126,11 @@ class TestAgentLoop(unittest.TestCase):
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         cls.port = cls.srv.server_address[1]
 
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
     def _cfg(self, **kw):
         cfg = config.load()
         cfg.base_url = f"http://127.0.0.1:{self.port}/v1"
@@ -170,18 +176,23 @@ class TestSession(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             sess = os.path.join(d, "s.jsonl")
             cfg = config.load()                       # mock (base_url 없음)
+            cfg.base_url = ""
+            cfg.workspace_root = d
             cfg.session_file = sess
             cfg.show_steps = False
             a1 = Agent(cfg)
+            self.addCleanup(a1.close)
             out = a1.run("test.txt 파일에 생성 해줘")   # mock: write_file 1턴
             self.assertIn("완료", out)
-            lines = [json.loads(x) for x in open(sess, encoding="utf-8") if x.strip()]
+            with open(sess, encoding="utf-8") as fh:
+                lines = [json.loads(x) for x in fh if x.strip()]
             self.assertTrue(any(l.get("role") == "user" and "test.txt" in l["content"]
                                 and not l["content"].startswith("[도구 결과]") for l in lines))
             self.assertTrue(any(l.get("role") == "assistant" for l in lines))
             self.assertTrue(any(l.get("role") == "user" and "[도구 결과]" in l.get("content", "")
                                 for l in lines))
             a2 = Agent(cfg)                           # 재개: 전체 터널 복원
+            self.addCleanup(a2.close)
             self.assertGreaterEqual(len(a2.mem.turns), len(lines))
 
 
@@ -194,8 +205,11 @@ class TestWebTools(unittest.TestCase):
                     "http://10.0.0.5/", "file:///etc/passwd", "http://169.254.169.254/meta"]:
             with self.assertRaises(ValueError, msg=url):
                 webtools._public_host(url)
-        # 공개 호스트는 예외 없이 통과 (DNS 실패 서버여도 hostname 검사만 하므로 OK)
-        webtools._public_host("https://example.com/")
+        # CI에서 외부 DNS/네트워크에 의존하지 않는다.
+        with patch("harness.webtools.socket.getaddrinfo", return_value=[
+            (2, 1, 6, "", ("93.184.216.34", 443))
+        ]):
+            webtools._public_host("https://example.com/")
 
     def test_html_to_text(self):
         from harness import webtools

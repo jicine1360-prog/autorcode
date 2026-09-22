@@ -2,6 +2,7 @@
 import logging
 import os
 import subprocess
+import sys
 from typing import Callable, Dict
 
 from . import safety, webtools
@@ -24,49 +25,35 @@ def _cap(text: str, limit: int) -> str:
 def _bash(args, root, max_output, timeout):
     cmd = str(args.get("command", ""))
     safety.check_bash(cmd)
-    import resource
     import signal
+    from .config import load
 
-    def _limits():
-        os.setpgrp()
-        # 각 한도는 개별 try: 하나 실패해도 나머지 유지
+    cfg = load()
+    limits = [max(1, min(timeout, cfg.rlimit_cpu)), cfg.rlimit_mem_mb * 2**20,
+              cfg.rlimit_fsize_mb * 2**20,
+              _uid_threads() + 4 + cfg.rlimit_nproc if cfg.rlimit_nproc else 0]
+    runner = os.path.join(os.path.dirname(__file__), "process_runner.py")
+    command = [sys.executable, runner, *map(str, limits), cmd]
+
+    def terminate(proc):
         try:
-            resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout + 2))
-        except ValueError:
-            pass
-        try:
-            resource.setrlimit(resource.RLIMIT_FSIZE, (_rl("fsize"), _rl("fsize")))
-        except ValueError:
-            pass
-        try:
-            if _rl("mem"):
-                resource.setrlimit(resource.RLIMIT_AS, (_rl("mem"), _rl("mem")))
-        except ValueError:
-            pass
-        # NPROC은 커널이 UID의 스레드 수 기준으로 fork를 막는다 — 공유 서버에선
-        # (ollama 등이 수백 스레드) 실제 관측치 + 여유로 승격해야 안전하다.
-        try:
-            cur = _uid_threads()
-            need = cur + 4 + _rl("nproc")
-            resource.setrlimit(resource.RLIMIT_NPROC, (need, need))
-        except (ValueError, OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
             pass
 
-    try:
-        proc = subprocess.Popen(cmd, shell=True, cwd=root, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, preexec_fn=_limits)
-    except (ValueError, OSError):
-        proc = subprocess.Popen(cmd, shell=True, cwd=root, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True)
-    try:
-        out, err = proc.communicate(timeout=timeout + 2)
-    except subprocess.TimeoutExpired:
+    with subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                          errors="replace", start_new_session=True) as proc:
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except OSError:
-            proc.kill()
-        out, err = "", "[TIMEOUT] 명령이 타임아웃으로 프로세스그룹째 강제 종료됨"
-        proc.wait()
+            out, err = proc.communicate(timeout=max(0.1, timeout))
+        except subprocess.TimeoutExpired:
+            terminate(proc)
+            out, err = proc.communicate()
+            err += "\n[TIMEOUT] 명령이 타임아웃으로 프로세스그룹째 강제 종료됨"
+        except BaseException:
+            terminate(proc)
+            proc.communicate()
+            raise
     out = out or ""
     if err:
         out += ("\n" if out else "") + "[stderr]\n" + err
@@ -95,14 +82,6 @@ def _uid_threads():
         return total
     except OSError:
         return 0
-
-
-def _rl(kind):
-    from . import config as _c
-    cfg = _c.load()
-    return {"fsize": cfg.rlimit_fsize_mb * 2**20,
-            "nproc": cfg.rlimit_nproc,
-            "mem": cfg.rlimit_mem_mb * 2**20 if cfg.rlimit_mem_mb else 0}[kind]
 
 
 def _read_file(args: Args, root: str, max_output: int, timeout: int) -> str:

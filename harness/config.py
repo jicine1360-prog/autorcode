@@ -39,6 +39,8 @@ class Config:
     permissions_mode: str = os.getenv("AGENT_PERMS", "balanced")
     auto_yes: bool = False  # CLI --yes
     show_steps: bool = os.getenv("AGENT_SHOW_STEPS", "1") == "1"  # 과정 실시간 출력
+    show_details: bool = os.getenv("AGENT_SHOW_DETAILS", "0") == "1"
+    stream: bool = os.getenv("AGENT_STREAM", "1") == "1"
 
     # --- 프로세스 리소스 한도(비특권 하네스) ---
     rlimit_cpu: int = int(os.getenv("AGENT_RLIMIT_CPU", "60"))
@@ -76,6 +78,8 @@ def setup_logging(verbose: bool = False) -> None:
 
     root = logging.getLogger("agent")
     root.setLevel(logging.DEBUG)
+    if root.handlers:
+        return
     fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s", "%H:%M:%S")
     console = logging.StreamHandler(sys.stderr)  # 사용자 stdout 안 더럽히기
     console.setLevel(logging.DEBUG if verbose else logging.WARNING)
@@ -83,6 +87,5 @@ def setup_logging(verbose: bool = False) -> None:
     fh = logging.FileHandler(load().log_file, encoding="utf-8")
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(fmt)
-    if not root.handlers:
-        root.addHandler(console)
-        root.addHandler(fh)
+    root.addHandler(console)
+    root.addHandler(fh)

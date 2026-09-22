@@ -10,11 +10,12 @@ import logging
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
 
 from . import llm, memory, permissions, router, tools
 from .config import Config
+from .progress import Progress, short, tool_label
 
 log = logging.getLogger("agent.core")
 
@@ -42,9 +43,12 @@ SYSTEM_TEMPLATE = """너는 도구를 써서 컴퓨터를 조작하는 에이전
 - 완료 답장 전에 생성된 결과를 read_file/list_dir로 반드시 검증하라."""
 
 REPAIR_MSG = '[규칙 위반] (A)/(B)/(C) 중 순수 JSON 하나만 출력하라. 설명·펜스 금지.'
+PARALLEL_READ_TOOLS = {"read_file", "list_dir", "grep_files", "web_search", "web_fetch"}
 
 
 def parse_action(text: str) -> dict:
+    if not isinstance(text, str):
+        raise ValueError("응답은 문자열이어야 합니다")
     candidates = [text.strip()]
     m = re.search(r"```(?:json)?\s*(.*?)```", text.strip(), re.S)
     if m:
@@ -57,15 +61,31 @@ def parse_action(text: str) -> dict:
             obj = json.loads(c)
         except (ValueError, TypeError):
             continue
-        if isinstance(obj, dict) and ("done" in obj or "tool" in obj or "actions" in obj):
+        if not isinstance(obj, dict):
+            continue
+        kinds = sum(key in obj for key in ("done", "tool", "actions"))
+        if kinds != 1:
+            continue
+        if "done" in obj:
+            if obj["done"] is True and isinstance(obj.get("answer"), str):
+                return obj
+            continue
+        batch = obj.get("actions") if "actions" in obj else [obj]
+        if isinstance(batch, list) and batch and all(
+            isinstance(a, dict) and isinstance(a.get("tool"), str) and a["tool"]
+            and isinstance(a.get("args", {}), dict) for a in batch
+        ):
             return obj
     raise ValueError("유효한 액션 JSON 없음")
 
 
 class Agent:
-    def __init__(self, cfg: Config, confirmer: Optional[Callable[[str], bool]] = None):
+    def __init__(self, cfg: Config, confirmer: Optional[Callable[[str], bool]] = None,
+                 progress=None):
         self.cfg = cfg
         self.confirmer = confirmer
+        self.progress = progress if progress is not None else Progress(
+            enabled=cfg.show_steps, details=cfg.show_details)
         system = SYSTEM_TEMPLATE.format(tools=tools.schema_text(), max_actions=cfg.max_actions)
         self.mem = memory.Memory(system, cfg.context_tokens)
         if cfg.use_mock:
@@ -95,52 +115,82 @@ class Agent:
             return f"[거부] {why}"
         if decision == "confirm":
             if cfg.auto_yes:
+                self.progress.event(f"  [자동승인] {short(name)}")
                 return None
+            self.progress.event(f"  [승인 대기] {tool_label(name, args)}")
             ok = self.confirmer(f"{name}: {json.dumps(args, ensure_ascii=False)[:200]}\n사유: {why}") \
                 if self.confirmer else False
             if not ok:
                 return f"[거부] 사용자 미승인 ({why}). --yes 로 자동승인 가능"
+            self.progress.event(f"  [승인됨] {short(name)}")
         return None
 
     # ---------- 스텝 실행 ----------
-    def _show(self, text: str) -> None:
-        if self.cfg.show_steps:
-            print(text, flush=True)
-
-    def _brief(self, obs: str) -> str:
-        line = next((l for l in obs.splitlines() if l.strip() and not l.startswith("[exit=")), obs)
-        return line.strip()[:70]
-
-    def _run_one(self, name: str, args: dict) -> str:
+    def _execute(self, name, args):
         cfg = self.cfg
-        err = self._gate(name, args if isinstance(args, dict) else {})
-        if err:
-            return f"[오류] {err}"
-        return tools.execute(name, args if isinstance(args, dict) else {},
-                             cfg.workspace_root, cfg.max_output, cfg.bash_timeout)
+        started = time.monotonic()
+        result = tools.execute(name, args, cfg.workspace_root, cfg.max_output, cfg.bash_timeout)
+        return result, time.monotonic() - started
 
-    def _run_action(self, action: dict) -> str:
+    def _run_action(self, action, step=1):
+        batch = action.get("actions", [action])
+        results = [None] * len(batch)
+        ready = []
+        # input()을 작업 스레드에서 동시에 호출하지 않는다. 승인은 실행 전에 직렬 처리.
+        for i, item in enumerate(batch):
+            name, args = item["tool"], item.get("args", {})
+            label = f"{step}.{i + 1} {tool_label(name, args)}"
+            err = self._gate(name, args)
+            if err:
+                results[i] = "[오류] " + err
+                self.progress.result(label, results[i], 0)
+            else:
+                ready.append((i, name, args, label))
+
+        parallel = len(ready) > 1 and all(item[1] in PARALLEL_READ_TOOLS for item in ready)
+        if parallel:
+            with self.progress.activity(f"[{step}] 독립 조회 {len(ready)}개 병렬 실행") as activity:
+                with ThreadPoolExecutor(max_workers=min(len(ready), self.cfg.max_actions)) as pool:
+                    pending = {}
+                    for i, name, args, label in ready:
+                        self.progress.event(f"  [실행] {label}")
+                        pending[pool.submit(self._execute, name, args)] = (i, label)
+                    for future in as_completed(pending):
+                        i, label = pending[future]
+                        result, elapsed = future.result()
+                        results[i] = result
+                        self.progress.result(label, result, elapsed)
+                        left = sum(value is None for value in results)
+                        self.progress.update(activity, f"병렬 조회 · {left}개 남음")
+        else:
+            if len(ready) > 1:
+                self.progress.event(f"[{step}] 쓰기·셸·영상 작업 포함 — 순서대로 실행")
+            for i, name, args, label in ready:
+                with self.progress.activity(f"[{label}] 실행 중"):
+                    result, elapsed = self._execute(name, args)
+                results[i] = result
+                self.progress.result(label, result, elapsed)
         if "actions" in action:
-            batch = [a for a in action["actions"] if isinstance(a, dict)][:self.cfg.max_actions]
-            for a in batch:  # 병렬 선언도 사용자에겐 보여준다
-                self._show(f"  ├ {a.get('tool')} {json.dumps(a.get('args') or {}, ensure_ascii=False)[:90]}")
-            with ThreadPoolExecutor(max_workers=len(batch) or 1) as ex:
-                futs = [ex.submit(self._run_one, str(a.get("tool", "")), a.get("args") or {})
-                        for a in batch]
-                parts = []
-                for a, f in zip(batch, futs):
-                    parts.append(f"<{a.get('tool')}> {f.result()}")
-            return "\n".join(parts)
-        return self._run_one(str(action.get("tool", "")), action.get("args") or {})
+            return "\n".join(f"<{item['tool']}> {result}" for item, result in zip(batch, results))
+        return results[0]
 
     # ---------- 메인 루프 ----------
     def run(self, task: str) -> str:
+        try:
+            return self._run(task)
+        except KeyboardInterrupt:
+            self.progress.event("[중단] 사용자가 현재 작업을 중단했습니다")
+            self.mem.add("user", "[도구 결과] 사용자가 작업을 중단했습니다. 완료로 간주하지 마세요.")
+            return "[중단] 현재 작업 취소. 새 요청을 입력할 수 있습니다."
+
+    def _run(self, task: str) -> str:
         cfg = self.cfg
-        t0 = time.time()
+        t0 = time.monotonic()
         stats = {"steps": 0, "llm_calls": 0, "tools": {}, "in_tokens": 0, "out_tokens": 0}
         tier, reason = router.route(task)
         model = self._model_for(tier)
         log.info("tier=%s model=%s (%s)", tier, model, reason)
+        self.progress.event(f"[시작] {model} · {tier} · 작업 위치: {cfg.workspace_root}")
         self.mem.add("user", task, stats)
         violations = 0
         for step in range(1, cfg.max_iterations + 1):
@@ -148,16 +198,38 @@ class Agent:
             msgs = self.mem.messages()
             stats["in_tokens"] += sum(memory.estimate(m["content"]) for m in msgs)
             try:
-                resp = self.llm.chat(msgs, model)
+                with self.progress.activity(
+                    f"[{step}/{cfg.max_iterations}] 모델 응답 대기 · {model}"
+                ) as activity:
+                    received = False
+
+                    def on_event(kind, value):
+                        nonlocal received
+                        if kind == "received":
+                            if not received:
+                                self.progress.event(f"[{step}] 응답 수신 시작")
+                                received = True
+                            self.progress.update(activity, f"모델 응답 수신 중 · {value:,}자")
+                        elif kind == "retry":
+                            received = False
+                            self.progress.event(f"[{step}] {value}")
+                            self.progress.update(activity, value)
+
+                    resp = self.llm.chat(msgs, model, stream=cfg.stream, on_event=on_event)
+                self.progress.event(f"[{step}] 모델 응답 수신 완료 · {activity.elapsed:.1f}s · {len(resp):,}자")
             except llm.LLMError as e:
+                self.progress.event(f"[실패] 모델 요청: {e}")
                 return f"[중단] LLM 호출 불가: {e}"
             stats["llm_calls"] += 1
             stats["out_tokens"] += memory.estimate(resp)
             self.mem.add("assistant", resp, stats)
             try:
                 action = parse_action(resp)
-            except ValueError:
+                if len(action.get("actions", [])) > cfg.max_actions:
+                    raise ValueError(f"한 단계 도구 한도 {cfg.max_actions}개 초과")
+            except ValueError as e:
                 violations += 1
+                self.progress.event(f"[{step}] 응답 형식 재요청 {violations}/3 · {e}")
                 if violations >= 3:
                     return "[중단] 모델이 JSON 규식을 3회 위반 — AGENT_MODEL 교체 또는 --provider ollama 확인"
                 self.mem.add("user", REPAIR_MSG, stats)
@@ -168,23 +240,20 @@ class Agent:
                 ans = str(action.get("answer", "(빈 답변)"))
                 summary = (f"[{tier}/{model} · {step}스텝 · 도구{sum(stats['tools'].values())}회"
                            f" · in~{stats['in_tokens']}tok/out~{stats['out_tokens']}tok"
-                           f" · {time.time() - t0:.1f}s]")
-                self._save_session(task, ans, summary)
+                           f" · {time.monotonic() - t0:.1f}s]")
+                self.progress.event(f"[완료] {step}스텝 · 도구 요청 {sum(stats['tools'].values())}회")
                 return f"{summary}\n{ans}"
 
             name = str(action.get("tool", ""))
             for n in ([name] if "tool" in action else [a.get("tool", "?") for a in action.get("actions", [])]):
                 stats["tools"][n] = stats["tools"].get(n, 0) + 1
-            log.info("step %d: %s", step, json.dumps(action, ensure_ascii=False)[:200])
-            if "tool" in action:
-                self._show(f"[{step}] {name} {json.dumps(action.get('args') or {}, ensure_ascii=False)[:90]}")
-            obs = self._run_action(action)
-            self._show(f"  └→ {self._brief(obs)}")
+            log.info("step %d: tools=%s", step, [a["tool"] for a in action.get("actions", [action])])
+            obs = self._run_action(action, step)
             self.mem.add("user", f"[도구 결과] →\n<untrusted>\n{obs[:cfg.max_output]}\n</untrusted>", stats)
 
         out = (f"[중단] 최대 스텝({cfg.max_iterations}) 초과 — 진행상황은 {cfg.log_file} 확인"
                f" (도구사용 {stats['tools']})")
-        self._save_session(task, out, "")
+        self.progress.event(f"[중단] 단계 한도 {cfg.max_iterations}회 도달")
         return out
 
     def _model_for(self, tier: str) -> str:
@@ -196,8 +265,10 @@ class Agent:
             self._sess.write(json.dumps(entry, ensure_ascii=False) + "\n")
             self._sess.flush()
 
-    def _save_session(self, task: str, answer: str, summary: str) -> None:
-        pass  # 턴 단위로 이미 영속화됨 (Memory.on_add)
+    def close(self):
+        if self._sess:
+            self._sess.close()
+            self._sess = None
 
     def _load_session(self, path: str) -> None:
         n = 0

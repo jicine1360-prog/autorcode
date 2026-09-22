@@ -26,12 +26,21 @@ def main() -> int:
     ap.add_argument("--session", help="히스토리 jsonl 저장/재개")
     ap.add_argument("--tools", action="store_true", help="도구 목록")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--quiet", action="store_true", help="진행 출력 끄기")
+    ap.add_argument("--details", action="store_true", help="도구 결과 미리보기 확대")
+    ap.add_argument("--no-stream", action="store_true", help="SSE 대신 일반 JSON 응답 사용")
     args = ap.parse_args()
 
     if args.provider == "ollama":
         os.environ["AGENT_PROVIDER"] = "ollama"
     cfg = config.load()
     cfg.auto_yes = args.yes
+    if args.quiet:
+        cfg.show_steps = False
+    if args.details:
+        cfg.show_details = True
+    if args.no_stream:
+        cfg.stream = False
     if args.session:
         cfg.session_file = args.session
     config.setup_logging(args.verbose)
