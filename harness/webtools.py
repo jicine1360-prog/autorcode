@@ -148,7 +148,7 @@ def _youtube(args, root, max_output, timeout):
         # transcript
         tmpdir = os.path.join(root, ".autorcode_tmp")
         os.makedirs(tmpdir, exist_ok=True)
-        template = os.path.join(tmpdir, "yt_%s.%(ext)s" % abs(hash(url))[:10])
+        template = os.path.join(tmpdir, "yt_" + str(abs(hash(url)))[:10] + ".%(ext)s")
         subprocess.run([ytdlp, "--skip-download", "--write-auto-subs", "--write-subs",
                         "--sub-langs", "ko,en", "-o", template, url],
                        capture_output=True, text=True, timeout=tmo)
