@@ -43,6 +43,8 @@ SYSTEM_TEMPLATE = """너는 도구를 써서 컴퓨터를 조작하는 에이전
 - 완료 답장 전에 생성된 결과를 read_file/list_dir로 반드시 검증하라."""
 
 REPAIR_MSG = '[규칙 위반] (A)/(B)/(C) 중 순수 JSON 하나만 출력하라. 설명·펜스 금지.'
+LENGTH_MSG = ('[피드백] 이전 답변이 길이 제한에 걸려 잘렸습니다. 같은 목표를 '
+              '(A)/(B)/(C) 규식으로 120자 내외의 짧고 완결된 JSON 하나로 다시 출력하라.')
 PARALLEL_READ_TOOLS = {"read_file", "list_dir", "grep_files", "web_search", "web_fetch"}
 
 
@@ -217,6 +219,14 @@ class Agent:
 
                     resp = self.llm.chat(msgs, model, stream=cfg.stream, on_event=on_event)
                 self.progress.event(f"[{step}] 모델 응답 수신 완료 · {activity.elapsed:.1f}s · {len(resp):,}자")
+            except llm.LengthError:
+                violations += 1
+                self.progress.event(f"[{step}] 답변 길이 초과 — 더 짧게 재요청 {violations}/3")
+                if violations >= 3:
+                    return ("[중단] 모델 답변이 3회 연속 길이 제한에 걸렸습니다 — "
+                            f"AGENT_MAX_TOKENS(현재 {cfg.max_tokens})를 늘려주세요")
+                self.mem.add("user", LENGTH_MSG, stats)
+                continue
             except llm.LLMError as e:
                 self.progress.event(f"[실패] 모델 요청: {e}")
                 return f"[중단] LLM 호출 불가: {e}"

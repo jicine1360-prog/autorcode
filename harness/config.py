@@ -20,7 +20,7 @@ class Config:
     model_fast: str = os.getenv("AGENT_MODEL_FAST", "gpt-4o-mini")
     model_smart: str = os.getenv("AGENT_MODEL_SMART", "gpt-4o")
     temperature: float = float(os.getenv("AGENT_TEMPERATURE", "0.1"))
-    max_tokens: int = int(os.getenv("AGENT_MAX_TOKENS", "800"))
+    max_tokens: int = int(os.getenv("AGENT_MAX_TOKENS", "2048"))
     api_timeout: int = int(os.getenv("AGENT_API_TIMEOUT", "120"))
     api_retries: int = int(os.getenv("AGENT_API_RETRIES", "3"))
 

@@ -12,7 +12,7 @@ from unittest.mock import patch
 from harness.agent_core import Agent, parse_action
 from harness.cli import main, repl_command
 from harness.config import Config
-from harness.llm import LLMError
+from harness.llm import LLMError, LengthError
 from harness.progress import Progress, result_status, terminal_line, tool_label
 
 
@@ -100,6 +100,24 @@ class ProgressTests(unittest.TestCase):
         self.assertNotIn("DO_NOT_DISPLAY", output)
         self.assertNotIn('"tool":', output)
         self.assertIn("finished", answer)
+
+    def test_length_limit_retries_shorter_not_abort(self):
+        self.agent.llm = ScriptedModel(
+            LengthError("길이 제한"), LengthError("길이 제한"),
+            {"done": True, "answer": "finally short"})
+        answer = self.agent.run("test")
+        self.assertIn("finally short", answer)
+        output = self.output.getvalue()
+        self.assertIn("답변 길이 초과", output)
+        self.assertIn("2/3", output)
+        self.assertNotIn("LLM 호출 불가", output)
+
+    def test_length_limit_gives_up_after_three(self):
+        self.agent.llm = ScriptedModel(
+            LengthError("길이 제한"), LengthError("길이 제한"), LengthError("길이 제한"))
+        answer = self.agent.run("test")
+        self.assertIn("AGENT_MAX_TOKENS", answer)
+        self.assertIn("3/3", self.output.getvalue())
 
     def test_malformed_reply_visible_and_recovered(self):
         self.agent.llm = ScriptedModel(

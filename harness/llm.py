@@ -23,9 +23,13 @@ class LLMError(RuntimeError):
     pass
 
 
+class LengthError(LLMError):
+    """출력 토큰 상한에 걸렸지만 회복 가능하다 — 더 짧게 재요청한다."""
+
+
 class OpenAICompatibleLLM:
     def __init__(self, base_url: str, api_key: str, timeout: int,
-                 retries: int, temperature: float, max_tokens: int = 800):
+                 retries: int, temperature: float, max_tokens: int = 2048):
         if not base_url.startswith(("http://", "https://")):
             raise LLMError(f"잘못된 base_url: {base_url!r}")
         self.endpoint = base_url.rstrip("/") + "/chat/completions"
@@ -65,7 +69,7 @@ class OpenAICompatibleLLM:
                 if not isinstance(content, str) or not content.strip():
                     raise LLMError("모델이 빈 응답을 반환했습니다")
                 if choice.get("finish_reason") == "length":
-                    raise LLMError("응답 길이 제한 도달 — AGENT_MAX_TOKENS를 늘려주세요")
+                    raise LengthError("응답 길이 제한 도달")
                 if on_event:
                     on_event("received", len(content))
                 return content
@@ -134,7 +138,7 @@ class OpenAICompatibleLLM:
                     on_event("received", received)
             reason = choice.get("finish_reason")
             if reason == "length":
-                raise LLMError("응답 길이 제한 도달 — AGENT_MAX_TOKENS를 늘려주세요")
+                raise LengthError("응답 길이 제한 도달")
             if reason is not None:
                 finished = True
         text = "".join(parts)
