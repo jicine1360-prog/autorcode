@@ -45,6 +45,8 @@ SYSTEM_TEMPLATE = """너는 도구를 써서 컴퓨터를 조작하는 에이전
 REPAIR_MSG = '[규칙 위반] (A)/(B)/(C) 중 순수 JSON 하나만 출력하라. 설명·펜스 금지.'
 LENGTH_MSG = ('[피드백] 이전 답변이 길이 제한에 걸려 잘렸습니다. 같은 목표를 '
               '(A)/(B)/(C) 규식으로 120자 내외의 짧고 완결된 JSON 하나로 다시 출력하라.')
+# "키": 형태가 하나도 없으면 도구 규식 JSON이 아닌 평문 답변으로 판단한다.
+_JSON_HINT = re.compile(r'"[^"\n]{1,60}"\s*:')
 PARALLEL_READ_TOOLS = {"read_file", "list_dir", "grep_files", "web_search", "web_fetch"}
 
 
@@ -239,6 +241,16 @@ class Agent:
                     raise ValueError(f"한 단계 도구 한도 {cfg.max_actions}개 초과")
             except ValueError as e:
                 violations += 1
+                if violations == 1 and not _JSON_HINT.search(resp):
+                    # 도구 규식 JSON이 전혀 없는 평문 답변 — 캐주얼 채팅이므로
+                    # 모델이 뭘 하지 않고 바로 답한 것으로 인정하고 중단하지 않는다.
+                    ans = resp.strip() or "(빈 답변)"
+                    summary = (f"[{tier}/{model} · {step}스텝 · 도구{sum(stats['tools'].values())}회"
+                               f" · in~{stats['in_tokens']}tok/out~{stats['out_tokens']}tok"
+                               f" · {time.monotonic() - t0:.1f}s]")
+                    self.progress.event(f"[{step}] 도구 규식 아닌 평문 답변을 바로 답으로 인정")
+                    return f"{summary}\n{ans}"
+                log.warning("JSON 파싱 실패(step %d) 응답: %s", step, short(resp, 400))
                 self.progress.event(f"[{step}] 응답 형식 재요청 {violations}/3 · {e}")
                 if violations >= 3:
                     return "[중단] 모델이 JSON 규식을 3회 위반 — AGENT_MODEL 교체 또는 --provider ollama 확인"

@@ -80,7 +80,8 @@ autorcode run phi4 "파일 목록 봐" 2>progress.log
 `판단(LLM) ↔ JSON 프로토콜 ↔ 하네스(도구 실행/권한/샌드박스)`
 
 - **라우팅**: 요청 키워드 점수로 fast/smart, `run <model>`은 단일 모델 고정
-- **프로토콜**: A)단일도구 B)병렬도구(actions) C)done — 3단 파서+셀프리페어
+- **프로토콜**: A)단일도구 B)병렬도구(actions) C)done — 3단 파서+셀프리페어.
+  모델이 규식 JSON 없이 평문으로 답하면 그 답을 그대로 인정(캐주얼 채팅 하드중단 방지)
 - **도구**: bash / 파일(read·write·edit·list·grep) + **web_search**(DDG, API키 불필요) /
   **web_fetch**(웹페이지) / **youtube**(yt-dlp 메타+자막 — 영상 "보기")
 - **안전**: bash 화이트리스트 + 저술 명령 승인게이트(`AGENT_PERMS=yolo|balanced|strict`),

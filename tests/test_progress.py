@@ -125,6 +125,13 @@ class ProgressTests(unittest.TestCase):
         self.assertIn("recovered", self.agent.run("test"))
         self.assertIn("형식 재요청 1/3", self.output.getvalue())
 
+    def test_prose_reply_accepted_as_direct_answer(self):
+        self.agent.llm = ScriptedModel("네, 텔레그램 봇 상태를 확인해볼게요.")
+        answer = self.agent.run("봇 고쳐줘")
+        self.assertIn("상태를 확인해볼게요", answer)
+        self.assertIn("평문 답변을 바로 답으로 인정", self.output.getvalue())
+        self.assertNotIn("형식 재요청", self.output.getvalue())
+
     def test_llm_failure_and_interrupt_stop_cleanly(self):
         self.agent.llm = ScriptedModel(LLMError("offline"))
         self.assertIn("offline", self.agent.run("test"))
