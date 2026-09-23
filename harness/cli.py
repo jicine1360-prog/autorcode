@@ -8,6 +8,7 @@
   autorcode help                  # 전체 치트시트
 """
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -108,6 +109,7 @@ HELP_TEXT = """autorcode — 모델 라우팅 + 도구 실행 에이전트 (로�
   autorcode run phi4 --details      도구 결과 미리보기 확대 (3줄 → 12줄)
   autorcode run phi4 --no-stream    SSE 미지원 서버에 일반 JSON 요청
   autorcode run phi4 --session h.jsonl   히스토리 저장/재개
+  autorcode run phi4 --no-session         기본 자동 세션(작업폴더별) 끔
   autorcode chat phi4               도구 없는 단순 채팅
   autorcode doctor                  서버/메모리/GPU 자가진단
 
@@ -130,19 +132,21 @@ GPU 없이 즉시 사용 (OpenRouter — 모델명 '/' 포함)
 
 도구: bash / read_file / write_file / edit_file / list_dir / grep_files
       web_search(웹검색·키불필요) / web_fetch(웹페이지) / youtube(메타+자막)
+      remember / recall / forget(영속 기억 — 파악한 사실 저장, 재탐색 방지)
 격리: cwd 샌드박스 + 차단패턴(sudo rm -rf /, curl|sh, 포크폭탄…) +
       RLIMIT(CPU/MEM/FSIZE/NPROC) + 타임아웃 시 프로세스그룹째 KILL +
       웹 도구 SSRF 가드(사설 IP·내부 포트 접근 거부)
 
 권한 모드 (AGENT_PERMS)
-  balanced(기본)  읽기 화이트리스트 통과, 저술적(rm·python3·git·curl…)은 y/N 승인
+  balanced(기본)  읽기·조회(systemctl status 등) 자동 허용, 저술적(rm·python3·git·curl…)은 y/N 승인
   yolo            블랙리스트만 적용
   strict          bash·파일쓰기 전부 승인 필요
 
 환경변수 (AGENT_*)
   MODEL_FAST(기본 phi4:latest) MODEL_SMART(qwen3.8:27b-hunmin-64k)
-  API_TIMEOUT(120) MAX_STEPS(15) BASH_TIMEOUT(30) CONTEXT_TOKENS(20000)
+  API_TIMEOUT(120) MAX_STEPS(15) BASH_TIMEOUT(30) CONTEXT_TOKENS(40000)
   MAX_TOKENS(2048) RLIMIT_MEM_MB(4096) SESSION, PERMS
+  MEMORY_FILE(기본 ~/.autorcode/memory.txt) MEMORY_MAX_CHARS(3000)
   SHOW_STEPS(1) SHOW_DETAILS(0) STREAM(1) — 0/1로 표시·스트리밍 설정
   OPENROUTER_API_KEY=sk-or-...  OPENROUTER_MODEL(기본 deepseek/deepseek-chat-v3)
 
@@ -211,6 +215,12 @@ def _make_cfg(model: str, rest) -> config.Config:
         cfg.stream = False
     if rest.session:
         cfg.session_file = rest.session
+    elif not getattr(rest, "no_session", False):
+        # 기본 세션: 작업 디렉터리 기준 — 이전 파악 내용을 이어서 기억
+        path = os.path.expanduser(
+            f"~/.autorcode/session_{hashlib.md5(cfg.workspace_root.encode()).hexdigest()[:10]}.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        cfg.session_file = path
     return cfg
 
 
@@ -351,6 +361,7 @@ def main() -> int:
     p.add_argument("--no-stream", action="store_true", help="SSE 대신 일반 JSON 응답 사용")
     p.add_argument("--verbose", action="store_true", help="진단 로그 출력")
     p.add_argument("--session", help="히스토리 jsonl")
+    p.add_argument("--no-session", action="store_true", help="기본 세션 저장 끔")
     p.set_defaults(fn=cmd_run, cmd="run")
 
     p = sub.add_parser("list", help="로컬 모델 목록")

@@ -6,7 +6,7 @@ import subprocess
 import sys
 from typing import Callable, Dict
 
-from . import safety, webtools
+from . import notes, safety, webtools
 
 log = logging.getLogger("agent.tools")
 
@@ -185,6 +185,23 @@ def _grep_files(args: Args, root: str, max_output: int, timeout: int) -> str:
     return _cap("\n".join(hits) if hits else "일치 없음", max_output)
 
 
+def _remember(args, root, max_output, timeout):
+    fact = str(args.get("fact", "")).strip()
+    maxlen = int(args.get("max_len") or 0)
+    if maxlen and len(fact) > maxlen:
+        fact = fact[:maxlen] + "…"
+    return notes.append(fact)
+
+
+def _recall(_args, root, max_output, timeout):
+    text = notes.load()
+    return text or "[기억 없음] 아직 저장된 사실이 없다."
+
+
+def _forget(_args, root, max_output, timeout):
+    return notes.clear()
+
+
 TOOLS: Dict[str, ToolFn] = {
     "bash": _bash,
     "read_file": _read_file,
@@ -192,6 +209,9 @@ TOOLS: Dict[str, ToolFn] = {
     "edit_file": _edit_file,
     "list_dir": _list_dir,
     "grep_files": _grep_files,
+    "remember": _remember,
+    "recall": _recall,
+    "forget": _forget,
     **webtools.TOOLS,
 }
 
@@ -202,6 +222,9 @@ SCHEMAS = {
     "edit_file": "args: {path:str, old_string:str, new_string:str, replace_all?:bool, whole_word?:bool} — 부분 치환 (whole_word=true면 단어 단위만)",
     "list_dir": "args: {path?:str} — 디렉터리 목록",
     "grep_files": "args: {pattern:str, path?:str, max_matches?:int} — 정규식 내용 검색",
+    "remember": "args: {fact:str, max_len?:int} — 서버/시스템에서 파악한 사실을 오래 기억에 저장 (재방문 방지)",
+    "recall": "args: {} — 지금까지 기억한 사실 목록 조회",
+    "forget": "args: {} — 기억 전체 삭제",
     **webtools.SCHEMAS,
 }
 

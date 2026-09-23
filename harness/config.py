@@ -33,7 +33,9 @@ class Config:
     max_actions: int = int(os.getenv("AGENT_MAX_ACTIONS", "4"))
 
     # --- 컨텍스트 예산(토큰 기준 추정) ---
-    context_tokens: int = int(os.getenv("AGENT_CONTEXT_TOKENS", "20000"))
+    context_tokens: int = int(os.getenv("AGENT_CONTEXT_TOKENS", "40000"))
+    memory_file: str = os.getenv("AGENT_MEMORY_FILE", "")
+    memory_max_chars: int = int(os.getenv("AGENT_MEMORY_MAX_CHARS", "3000"))
 
     # --- 권한: yolo | balanced | strict ---
     permissions_mode: str = os.getenv("AGENT_PERMS", "balanced")

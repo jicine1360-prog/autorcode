@@ -16,12 +16,33 @@ ALLOW_BIN = {
     "rg", "find", "pwd", "date", "echo", "printf", "df", "du", "ps", "stat",
     "file", "diff", "which", "whoami", "id", "uname", "uptime", "free", "tree",
     "env", "sed", "awk", "basename", "dirname", "seq", "true", "false", "test",
+    "less", "ss", "netstat", "lsof", "nproc", "lsblk", "lscpu", "lspci",
+    "lsusb", "blkid", "getent", "locale",
+}
+# 본래 상태 변경이 가능하지만 인자/옵션을 조사해 "읽기 전용 호출"일 때만 무승인 허용.
+# 조건이 False면 CONFIRM_BIN처럼 승인을 요구한다.
+_SYSCTL_RO = {"status", "is-active", "is-enabled", "is-failed", "show", "list-units",
+              "list-unit-files", "list-timers", "list-sockets", "list-jobs",
+              "list-dependencies", "get-default", "cat", "list-machines"}
+_READONLY_BIN = {
+    "systemctl": lambda c: _word(c, 1) in _SYSCTL_RO,
+    "journalctl": lambda c: "--vacuum" not in c,
+    "dmesg": lambda c: not re.search(r"-(?:c|C)(?:\s|$)", c),
+    "ip": lambda c: bool(re.search(r"\b(?:show|sh|list)\b", c)),
+    "hostname": lambda c: len([w for w in c.split() if not w.startswith("-")]) <= 1,
+    "hostnamectl": lambda c: _word(c, 1) == "status",
+    "ldconfig": lambda c: False,  # /etc/ld.so.cache 갱신 — 항상 승인 필요
 }
 CONFIRM_BIN = {
     "rm", "mv", "cp", "mkdir", "rmdir", "touch", "chmod", "chown", "ln", "tar",
     "zip", "unzip", "git", "python", "python3", "node", "npm", "npx", "pip",
     "pip3", "make", "cargo", "kill", "pkill", "nohup", "systemctl", "curl", "wget",
 }
+
+
+def _word(cmd: str, idx: int) -> str:
+    words = [w for w in cmd.split() if not w.startswith("-")]
+    return words[idx] if 0 <= idx < len(words) else ""
 _PIPE_SPLIT = re.compile(r"&&|\|\||;|\||\$\(")
 
 # 화이트리스트 바이너리라도 이 인자/패턴은 임의 실행 탈출구다
@@ -57,6 +78,10 @@ def check_bash(cmd: str, mode: str):
     if mode == "strict":
         return "confirm", "strict 모드: bash 전체 승인 필요"
     for b in firsts:
+        if b in _READONLY_BIN:
+            if _READONLY_BIN[b](cmd):
+                continue  # 읽기 전용 호출 → 승인 없이 허용
+            return "confirm", f"'{b}' 상태 변경 호출 — 승인 필요 (읽기 전용 인자면 자동 허용)"
         if b in CONFIRM_BIN:
             return "confirm", f"저술적 명령 '{b}' 승인 필요"
         if b not in ALLOW_BIN:
