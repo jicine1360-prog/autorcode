@@ -5,7 +5,9 @@
   <br><b>Made by JICloud</b>
 </p>
 
-> 로컬(Ollama)·클라우드(OpenRouter) 모델을 fast·smart 티어로 자동 라우팅하고, 도구(웹/유튜브/bash/파일)를 샌드박스로 실행하면서 진행 상황을 실시간으로 보여주는 에이전트.
+> **로컬 우선 · 데이터는 내 서버에만.** 기본으로 Ollama에서 전부 실행하므로 모델도, 잔여 기록도 클라우드로 안 나갑니다.
+> 도구(웹/유튜브/bash/파일)는 **샌드박스 + 화이트리스트 + 차단패턴 + SSRF 가드**로 묶어 실행하고,
+> 클라우드가 필요할 때만 OpenRouter로 명시 전환(모델명 `/` 포함)할 수 있습니다. GPU 없이도 동작.
 
 [![test](https://github.com/jicine1360-prog/autorcode/actions/workflows/test.yml/badge.svg)](https://github.com/jicine1360-prog/autorcode/actions/workflows/test.yml)
 
