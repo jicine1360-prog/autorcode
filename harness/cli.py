@@ -79,9 +79,24 @@ def _match_model(arg: str, names: list):
     return arg if ":" in arg else None
 
 
+def _resolve_backend(model: str):
+    """프로바이더 결정: AGENT_BASE_URL > 모델에 '/' 포함 → OpenRouter > 로컬 ollama."""
+    if os.getenv("AGENT_BASE_URL"):
+        return os.getenv("AGENT_BASE_URL"), os.getenv("AGENT_API_KEY") or "ollama"
+    if "/" in model:
+        key = os.getenv("OPENROUTER_API_KEY")
+        if not key:
+            raise SystemExit(
+                "[오류] '/' 포함 모델은 OpenRouter 경유입니다. "
+                "OPENROUTER_API_KEY=sk-or-... 를 설정하거나 "
+                "(AGENT_BASE_URL/AGENT_API_KEY로 임의 OpenAI 호환 서버도 가능)")
+        return "https://openrouter.ai/api/v1", key
+    return _host() + "/v1", "ollama"
+
+
 # ---------------- subcommands ----------------
 
-HELP_TEXT = """autorcode — 모델 라우팅 + 도구 실행 에이전트 (openai 과금 없이 로컬 ollama)
+HELP_TEXT = """autorcode — 모델 라우팅 + 도구 실행 에이전트 (로컬 ollama + 클라우드 공존)
 
 기본 사용
   autorcode list                    설치된 모델 (크기/로드상태)
@@ -95,6 +110,11 @@ HELP_TEXT = """autorcode — 모델 라우팅 + 도구 실행 에이전트 (open
   autorcode run phi4 --session h.jsonl   히스토리 저장/재개
   autorcode chat phi4               도구 없는 단순 채팅
   autorcode doctor                  서버/메모리/GPU 자가진단
+
+GPU 없이 즉시 사용 (OpenRouter — 모델명 '/' 포함)
+  OPENROUTER_API_KEY=sk-or-... autorcode run deepseek/deepseek-chat-v3 "분석해"
+  ollama가 꺼져 있어도 OPENROUTER_API_KEY만 있으면 자동 전환됨
+  기본 클라우드 모델은 OPENROUTER_MODEL(기본 deepseek/deepseek-chat-v3)로 변경
 
 실행 과정
   모델 요청 즉시 대기 표시 → 응답 수신량(글자 수) → 도구 실행 → 결과/시간 표시
@@ -124,6 +144,7 @@ HELP_TEXT = """autorcode — 모델 라우팅 + 도구 실행 에이전트 (open
   API_TIMEOUT(120) MAX_STEPS(15) BASH_TIMEOUT(30) CONTEXT_TOKENS(20000)
   MAX_TOKENS(2048) RLIMIT_MEM_MB(4096) SESSION, PERMS
   SHOW_STEPS(1) SHOW_DETAILS(0) STREAM(1) — 0/1로 표시·스트리밍 설정
+  OPENROUTER_API_KEY=sk-or-...  OPENROUTER_MODEL(기본 deepseek/deepseek-chat-v3)
 
 유료 API 전환
   AGENT_BASE_URL=https://api.openai.com/v1 AGENT_API_KEY=sk-... \\
@@ -169,13 +190,15 @@ def cmd_doctor(_args):
     except Exception:
         pass
     print(f"경고     : " + ("AGENT_BASE_URL/OLLAMA_HOST 미설정 → autorcode run은 ollama 기본으로 동작" if not (os.getenv("AGENT_BASE_URL") or os.getenv("OLLAMA_HOST")) else "AGENT_BASE_URL 설정됨 — autorcode run이 그 엔드포인트 우선 사용"))
+    key = os.getenv("OPENROUTER_API_KEY")
+    if key:
+        print(f"openrouter: 키 설정됨 (…{key[-4:]}) — '/' 모델(클라우드) 즉시 사용 가능")
     return 0
 
 
 def _make_cfg(model: str, rest) -> config.Config:
     cfg = config.load()
-    cfg.base_url = os.getenv("AGENT_BASE_URL") or (_host() + "/v1")
-    cfg.api_key = os.getenv("AGENT_API_KEY") or "ollama"
+    cfg.base_url, cfg.api_key = _resolve_backend(model)
     cfg.model_fast = model
     cfg.model_smart = model
     if rest.yes:
@@ -198,7 +221,20 @@ def cmd_run(args):
     with progress.activity("[연결] 로컬 모델 목록 확인"):
         names = _names()
     model, prompt = args.model, list(args.prompt or [])
-    if model:
+    cloud_key = os.getenv("OPENROUTER_API_KEY")
+    if not names:
+        if cloud_key:
+            if "/" in model:
+                pass  # 명시적 클라우드 모델 → 그대로 진행
+            elif not model:
+                model = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3")
+                print(f"[연결] ollama 응답 없음 → OpenRouter 사용 ({model})", file=sys.stderr)
+            else:
+                print(f"[오류] ollama가 응답하지 않아 로컬 모델 {model!r}을 쓸 수 없습니다. "
+                      f"클라우드로 실행하려면 'deepseek/deepseek-chat-v3' 같은 '/' 모델을 지정하세요.",
+                      file=sys.stderr)
+                return 1
+    elif model and "/" not in model:
         resolved = _match_model(model, names)
         if resolved is None:  # 모델 아닌 단어 → 프롬프트로 강등
             prompt.insert(0, model)
@@ -280,8 +316,9 @@ def cmd_chat(args):
     names = _names()
     model = _match_model(args.model, names) or args.model
     messages = [{"role": "system", "content": "간결하게 한국어로 답한다."}]
-    client = llm.OpenAICompatibleLLM(_host() + "/v1", "ollama", 120, 2, 0.3)
-    print(f"=== autorcode chat {model} (도구 없음/ollama급 응답) === exit 종료")
+    base_url, api_key = _resolve_backend(model)
+    client = llm.OpenAICompatibleLLM(base_url, api_key, 120, 2, 0.3)
+    print(f"=== autorcode chat {model} (도구 없음/{'OpenRouter' if '/' in model else 'ollama'}) === exit 종료")
     while True:
         try:
             q = _input("당신> ").strip()

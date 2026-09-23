@@ -16,12 +16,13 @@
 > - 동명의 다른 제품(autocode 등)과 무관한 개인 프로젝트입니다.
 
 openai 과금 없이 로컬 ollama로 도는 에이전트. 설치 한 번으로 `autorcode` 명령.
+**GPU가 없어도 됩니다** — OpenRouter만 설정하면 클라우드 모델로 같은 에이전트가 돌아갑니다.
 
 ## 설치
 ```bash
 cd agent-harness && bash install.sh     # → ~/.local/bin/autorcode
 ```
-요구사항: python3 (stdlib만), ollama 서버.
+요구사항: python3 (stdlib만). ollama 서버는 선택 — 없으면 OpenRouter로 동작.
 
 ## 사용
 ```bash
@@ -33,6 +34,18 @@ autorcode run phi4               # 대화형 REPL
 autorcode chat phi4              # 도구 없는 단순 채팅
 autorcode run                    # 인자 없음 → 로드된 모델 우선
 ```
+
+## GPU 없이 사용하기 (OpenRouter)
+ollama 대신 클라우드 API로 같은 에이전트 호출 — 모델명에 `/`를 넣으면 자동 라우팅됩니다.
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+autorcode run deepseek/deepseek-chat-v3 "현재 시간과 날짜 알려줘"   # 단발
+autorcode run deepseek/deepseek-chat-v3                            # REPL
+autorcode chat deepseek/deepseek-chat-v3                           # 도구 없이
+```
+- ollama가 꺼져 있어도 `OPENROUTER_API_KEY`만 있으면 모델 없이 `run`해도 자동 전환됩니다.
+- 기본 클라우드 모델은 `OPENROUTER_MODEL`(기본 `deepseek/deepseek-chat-v3`)로 변경.
+- 임의 OpenAI 호환 서버(vLLM 등)는 `AGENT_BASE_URL`/`AGENT_API_KEY`로 교체 가능.
 
 ## 실행 과정을 보면서 사용하기
 
