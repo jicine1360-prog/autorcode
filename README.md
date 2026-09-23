@@ -133,5 +133,8 @@ python3 -m compileall -q harness agent.py
 python3 -m unittest discover -s tests -v     # CI: GitHub Actions (.github/workflows/test.yml)
 ```
 
+## 문의/협업
+제안·협업·피드백은 **jicine1360@gmail.com** 으로 주세요.
+
 ## License
 MIT
