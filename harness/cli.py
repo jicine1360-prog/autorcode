@@ -29,6 +29,24 @@ def _host() -> str:
     return h.rstrip("/")
 
 
+def _input(prompt: str) -> str:
+    """터미널 로케일과 무관하게 raw 바이트로 읽어 디코딩한다.
+
+    input()은 sys.stdin의 로케일 인코딩(보통 utf-8)으로 읽다가 한글 euc-kr 계열
+    바이트에서 UnicodeDecodeError로 죽는 경우가 있어 raw 버퍼로 우회한다.
+    utf-8 → cp949 순으로 시도하고, 그래도 실패하면 replace 폴백 (예외 없음).
+    """
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    raw = sys.stdin.buffer.readline()
+    for enc in ("utf-8", "cp949"):
+        try:
+            return raw.decode(enc).strip()
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", "replace").strip()
+
+
 def _get(path: str, timeout: float = 5):
     req = urllib.request.Request(_host() + path)
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -205,7 +223,7 @@ def cmd_run(args):
         print(f"=== {head} === 도구 {len(tools.TOOLS)}개 · /help 도움말 · exit 종료", flush=True)
         while True:
             try:
-                task = input("당신> ").strip()
+                task = _input("당신> ").strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 return 0
@@ -266,7 +284,7 @@ def cmd_chat(args):
     print(f"=== autorcode chat {model} (도구 없음/ollama급 응답) === exit 종료")
     while True:
         try:
-            q = input("당신> ").strip()
+            q = _input("당신> ").strip()
         except (EOFError, KeyboardInterrupt):
             return 0
         if q.lower() in ("exit", "quit", ""):
