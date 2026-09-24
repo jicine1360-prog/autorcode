@@ -1,5 +1,7 @@
 # autorcode — 내 서버가 일하는 LLM 에이전트 CLI
 
+> 🌐 [English](README.en.md)
+
 <p align="center">
   <img src="docs/jicloud-logo.svg" alt="JICloud" width="220">
   <br><b>Made by JICloud</b>
@@ -121,7 +123,7 @@ autorcode run phi4 "파일 목록 봐" 2>progress.log
 AGENT_BASE_URL/AGENT_API_KEY   openai 전환: https://api.openai.com/v1 + sk-...
 AGENT_MODEL_FAST/SMART         ollama 모델명 (기본 phi4:latest / qwen3.8:27b-hunmin-64k)
 AGENT_PERMS                    yolo | balanced(기본) | strict
-AGENT_MAX_STEPS(15) AGENT_BASH_TIMEOUT(30) AGENT_CONTEXT_TOKENS(20000)
+AGENT_MAX_STEPS(15) AGENT_BASH_TIMEOUT(30) AGENT_CONTEXT_TOKENS(40000)
 AGENT_RLIMIT_MEM_MB(4096) AGENT_RLIMIT_NPROC(128) AGENT_MAX_TOKENS(2048)
 AGENT_SHOW_STEPS(1) AGENT_SHOW_DETAILS(0) AGENT_STREAM(1)   # 0/1
 ```
