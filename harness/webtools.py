@@ -128,7 +128,8 @@ def _web_fetch(args, root, max_output, timeout):
 def _youtube(args, root, max_output, timeout):
     url = str(args.get("url", "")).strip()
     mode = str(args.get("get", "info"))  # info | transcript
-    ytdlp = shutil.which("yt-dlp")
+    ytdlp = shutil.which("yt-dlp") or shutil.which(
+        os.path.expanduser("~/.local/bin/yt-dlp"))
     if not ytdlp:
         return "[오류] yt-dlp 미설치 — pip install yt-dlp"
     if not re.match(r"https?://(www\.|m\.)?(youtube\.com/|youtu\.be/)", url):

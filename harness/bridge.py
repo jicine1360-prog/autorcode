@@ -25,7 +25,8 @@ _TOKEN = os.getenv("AUTORCODE_BRIDGE_TOKEN", "")
 ALLOW_LIST = {"web_search", "web_fetch", "youtube", "read_file", "list_dir",
               "grep_files", "bash", "write_file", "edit_file",
               "excel_summary", "excel_write", "pdf_read", "image_ocr",
-              "remember", "recall", "forget"}
+              "remember", "recall", "forget", "find_files", "disk_usage",
+              "support_status", "service_intro"}
 
 
 class Handler(BaseHTTPRequestHandler):

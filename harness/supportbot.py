@@ -54,6 +54,12 @@ FAQ = [
 
 _ESCALATE = ["불만", "환불", "에러", "장애", "안 되", "고장", "버그", "데이터 삭제", "유출", "보안", "해킹"]
 
+# 야간(younger) 전용 고난도 LLM — 별도 엔드포인트로 라우팅 (fast보다 강한 모델)
+_NIGHT_BASE_URL = os.getenv("SUPPORT_NIGHT_BASE_URL",
+                            "http://100.110.82.116:8086/v1")
+_NIGHT_MODEL = os.getenv("SUPPORT_NIGHT_MODEL", "")  # 비면 서버 기본 모델 사용
+_NIGHT_API_KEY = os.getenv("SUPPORT_NIGHT_API_KEY", "")
+
 
 @dataclass
 class Ticket:
@@ -98,10 +104,41 @@ def _local_answer(msg: str) -> str:
                 "문의해 주시면 자세히 답변드립니다. (현재 로컬 응대 일시 중단)")
 
 
+def _hard_answer(msg: str) -> str:
+    """고난도(야간/energy) 문의 — younger의 nightshift(대형 모델)로 답변.
+
+    fast(phi4)로는 부족한 긴 문의·복합 질문에 사용. 응답이 매우 느리므로
+    (프리필 + 디코드 수십 초~수 분) 실패 시 fast 답변으로 폴백한다.
+    """
+    try:
+        from .llm import OpenAICompatibleLLM
+        model = OpenAICompatibleLLM(
+            _NIGHT_BASE_URL, _NIGHT_API_KEY,
+            timeout=int(os.getenv("SUPPORT_NIGHT_TIMEOUT", "600")),
+            retries=1,
+            temperature=0.2,
+            max_tokens=int(os.getenv("SUPPORT_NIGHT_MAX_TOKENS", "1200")),
+        )
+        messages = [
+            {"role": "system",
+             "content": "넌 autorcode 지원 어시스턴트. 신중하고 정확하게, "
+                        "전화 지원은 없다고 안내하고, 모르면 솔직히 모른다."},
+            {"role": "user", "content": msg},
+        ]
+        resp = model.chat(messages, model=_NIGHT_MODEL or "nightshift")
+        out = resp.strip()[:1200]
+        return out or "지원봇이 답변을 준비하지 못했습니다."
+    except Exception as e:
+        log.warning("nightshift(hard) 답변 실패 → fast 폴백: %s", e)
+        return _local_answer(msg)
+
+
 def handle_inquiry(msg: str, channel: str = "openwebui") -> dict:
     ticket = _classify(msg)
     if ticket.kind == "llm":
         ticket.answer = _local_answer(msg)
+    if ticket.kind == "escalate":
+        ticket.answer = _hard_answer(msg)
     if ticket.kind in ("llm", "escalate"):
         _notify_admin(msg, ticket)
     log.info("처리: kind=%s reason=%s channel=%s", ticket.kind, ticket.reason, channel)
