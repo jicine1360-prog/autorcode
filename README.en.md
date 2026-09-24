@@ -136,7 +136,30 @@ python3 -m unittest discover -s tests -v     # CI: GitHub Actions (.github/workf
 ```
 
 ## Contact / collaboration
-Ideas, collaboration and feedback: **jicine1360@gmail.com**
+
+- **Support bot (automated)**: most questions are answered automatically by the
+  management bot (FAQ + local model fallback).
+- **Email**: ideas, collaboration, and deeper questions: **jicine1360@gmail.com** (reply within 24h).
+- **No phone support** — all inquiries go through the support bot / email.
+
+## Open WebUI integration
+
+Paste `webui_tools.py` into Open WebUI (Workspace → Tools) to call autorcode tools
+from the browser. The host bridge (`harness/bridge.py`) runs tools on 127.0.0.1 with
+a Bearer token; the existing sandbox, RLIMIT and SSRF guards still apply.
+
+```bash
+# Run the bridge as a service (token via env or ~/autorcode/bridge.token)
+AUTORCODE_BRIDGE_TOKEN=<secret> python3 -m harness.bridge --port 8787 --workspace /home/hoony
+curl -X POST http://127.0.0.1:8787/tool -H "Authorization: Bearer <secret>" \
+  -d '{"tool":"list_dir","args":{},"root":"/home/hoony"}'
+```
+
+- **Bridge tools**: file read/edit, web search/fetch, YouTube subtitles,
+  **Excel (.xlsx) create/summary**, **PDF text extraction (pdftotext)**,
+  **image OCR (tesseract)**, persistent memory (remember/recall/forget).
+- **Note**: the bridge binds to localhost by default; if exposed, put it behind
+  auth (authelia etc.) and rotate the token.
 
 ## License
 MIT

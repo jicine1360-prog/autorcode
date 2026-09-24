@@ -136,7 +136,30 @@ python3 -m unittest discover -s tests -v     # CI: GitHub Actions (.github/workf
 ```
 
 ## 문의/협업
-제안·협업·피드백은 **jicine1360@gmail.com** 으로 주세요.
+
+- **지원봇(자동 응대)**: 질문은 대부분 관리봇이 FAQ/로컬 모델로 자동 처리합니다.
+- **이메일**: 제안·협업·심화 문의는 **jicine1360@gmail.com** (24시간 이내 답변).
+- **전화 지원은 제공하지 않습니다** — 모든 문의는 지원봇/이메일로 처리됩니다.
+
+## Web UI 연동 (Open WebUI)
+
+`webui_tools.py`를 Open WebUI(작업공간 → 도구)에 붙여넣으면 브라우저에서
+autorcode 도구를 호출할 수 있습니다. 호스트 브리지(`harness/bridge.py`)가
+127.0.0.1 + Bearer 토큰으로 도구를 실행하며 기존 샌드박스·RLIMIT·SSRF 가드가
+그대로 적용됩니다.
+
+```bash
+# 브리지를 systemd로 운영 (토큰은 ~/autorcode/bridge.token 또는 환경변수)
+AUTORCODE_BRIDGE_TOKEN=<비밀> python3 -m harness.bridge --port 8787 --workspace /home/hoony
+curl -X POST http://127.0.0.1:8787/tool -H "Authorization: Bearer <비밀>" \
+  -d '{"tool":"list_dir","args":{},"root":"/home/hoony"}'
+```
+
+- **브리지 도구**: 파일 조회·수정 / 웹검색·웹페이지 / 유튜브 자막 / **엑셀(.xlsx) 생성·요약** /
+  **PDF 텍스트 추출(pdftotext)** / **이미지 OCR(tesseract)** / 영구 기억(remember/recall/forget)
+- **주의**: 브리지는 localhost 바인딩이 기본. 외부 노출 시 반드시
+  인증(authelia 등) 뒤에 두고 토큰을 교체하세요.
+- 지원 문의는 위 "문의/협업" 항목(이메일)을 사용합니다.
 
 ## License
 MIT

@@ -1,0 +1,17 @@
+[Unit]
+Description=autorcode HTTP bridge (Open WebUI tool backend)
+After=network.target ollama.service
+
+[Service]
+Type=simple
+User=hoony
+WorkingDirectory=/home/hoony/agent-harness
+Environment=AUTORCODE_BRIDGE_TOKEN=c88d2f42a7164176cc0d6e356cb0e742b99982ff
+Environment=AGENT_WORKSPACE=/home/hoony
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/hoony/.hermes/hermes-agent/venv/bin/python3 -m harness.bridge --host 127.0.0.1 --port 8787 --workspace /home/hoony
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

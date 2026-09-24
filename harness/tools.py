@@ -2,8 +2,10 @@
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
+import time
 from typing import Callable, Dict
 
 from . import notes, safety, webtools
@@ -202,6 +204,154 @@ def _forget(_args, root, max_output, timeout):
     return notes.clear()
 
 
+# ---------------- 엑셀 (openpyxl) ----------------
+
+def _excel_summary(args, root, max_output, timeout):
+    path = safety.confine(str(args.get("path", "")), root)
+    if not os.path.isfile(path):
+        return f"[오류] 파일 없음: {args.get('path')}"
+    if not path.lower().endswith(".xlsx"):
+        return "[오류] .xlsx 파일만 지원"
+    sheet_name = str(args.get("sheet") or "")
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        return "[오류] openpyxl 미설치 — pip install openpyxl"
+    try:
+        wb = load_workbook(path, read_only=True, data_only=True)
+    except Exception as e:
+        return f"[오류] 엑셀 열기 실패: {e}"
+    if sheet_name and sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+    else:
+        ws = wb[wb.sheetnames[0]]
+        sheet_name = ws.title
+    lines = [f"파일: {path}", f"시트: {sheet_name}  (전체 시트: {', '.join(wb.sheetnames)})"]
+    max_rows = int(args.get("max_rows") or 30)
+    ncol = 0
+    rows_out = []
+    for i, row in enumerate(ws.iter_rows(values_only=True), 1):
+        if i > max_rows:
+            break
+        cells = ["" if v is None else str(v) for v in row]
+        ncol = max(ncol, len(cells))
+        rows_out.append(cells)
+    if not rows_out:
+        return "[엑셀] 빈 시트"
+    # 열 너비 조정(제목 12자, 값 18자)
+    col_w = [max(12, max((len(r[j]) if j < len(r) else 0) for r in rows_out) + 2)
+             for j in range(ncol)]
+    header = " | ".join(h.ljust(min(40, col_w[j])) for j, h in enumerate(rows_out[0]))
+    lines.append("열제목: " + header)
+    lines.append(f"행수(처음 {len(rows_out)}행 / 전체는 max_rows 증가): {ws.max_row} · 열수: {ws.max_column}")
+    for r in rows_out[1:]:
+        lines.append(" | ".join((r[j] if j < len(r) else "")[:min(50, col_w[j]) + 0]
+                                for j in range(min(len(r), ncol))))
+    # 숫자 컬럼 합계 (마지막 행까지)
+    sums = []
+    for j in range(ncol):
+        total = 0
+        ok = True
+        for r in ws.iter_rows(values_only=True):
+            if j < len(r) and isinstance(r[j], (int, float)):
+                total += r[j]
+            elif j < len(r) and r[j] is not None:
+                ok = False
+                break
+        if ok:
+            sums.append(f"{rows_out[0][j] if j < len(rows_out[0]) else ''}={round(total, 4)}")
+    if sums:
+        lines.append("숫자합계: " + ", ".join(sums))
+    wb.close()
+    return _cap("\n".join(lines), max_output)
+
+
+def _excel_write(args, root, max_output, timeout):
+    path = str(args.get("path", ""))
+    if not path:
+        return "[오류] path 필수"
+    if not path.lower().endswith(".xlsx"):
+        path += ".xlsx"
+    path = safety.confine(path, root, for_write=True)
+    content = str(args.get("content", ""))
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+    except ImportError:
+        return "[오류] openpyxl 미설치"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "요약"
+    # Markdown 표 -> 시트
+    rows = [ln for ln in content.splitlines() if ln.strip()]
+    data_rows = []
+    for ln in rows:
+        if "|" in ln and not ln.strip().startswith("|---"):
+            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+            data_rows.append(cells)
+    if not data_rows:
+        data_rows = [[ln] for ln in rows]
+    for r, cells in enumerate(data_rows, 1):
+        for c, val in enumerate(cells, 1):
+            cell = ws.cell(row=r, column=c, value=val)
+            if r == 1:
+                cell.font = Font(bold=True)
+    for col in ws.columns:
+        width = max(len(str(c.value)) + 2 if c.value else 10 for c in col)
+        ws.column_dimensions[col[0].column_letter].width = min(width, 60)
+    try:
+        wb.save(path)
+    except Exception as e:
+        return f"[오류] 저장 실패: {e}"
+    return f"저장됨: {path} ({len(data_rows)}행 × {max((len(r) for r in data_rows), default=0)}열)"
+
+
+def _pdf_read(args, root, max_output, timeout):
+    path = safety.confine(str(args.get("path", "")), root)
+    if not os.path.isfile(path):
+        return f"[오류] 파일 없음: {args.get('path')}"
+    pdftotext = shutil.which("pdftotext")
+    if not pdftotext:
+        return "[오류] pdftotext (poppler-utils) 미설치"
+    import tempfile
+    t0 = time.monotonic()
+    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tf:
+        tmp = tf.name
+    try:
+        r = subprocess.run([pdftotext, "-layout", path, tmp],
+                           capture_output=True, text=True, timeout=min(timeout, 90))
+        if r.returncode != 0:
+            return f"[오류] pdftotext: {(r.stderr or 'unknown')[:200]}"
+        with open(tmp, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    finally:
+        os.unlink(tmp)
+    n = text.count("\n")
+    head = f"PDF: {os.path.basename(path)} · {n+1}행 · {time.monotonic()-t0:.1f}초\n{'-'*40}\n"
+    return _cap(head + text, max_output)
+
+
+def _image_ocr(args, root, max_output, timeout):
+    path = safety.confine(str(args.get("path", "")), root)
+    if not os.path.isfile(path):
+        return f"[오류] 파일 없음: {args.get('path')}"
+    tesseract = shutil.which("tesseract")
+    if not tesseract:
+        return "[오류] tesseract 미설치"
+    lang = str(args.get("lang") or "kor+eng")
+    try:
+        r = subprocess.run([tesseract, path, "stdout", "-l", lang],
+                           capture_output=True, text=True, timeout=min(timeout, 120))
+    except subprocess.TimeoutExpired:
+        return "[오류] OCR 타임아웃 (큰 이미지?)"
+    if r.returncode != 0:
+        return f"[오류] tesseract: {(r.stderr or 'unknown')[:200]}"
+    text = r.stdout.strip()
+    if not text:
+        return "[OCR] 텍스트를 찾지 못함 (흐린/회전 이미지일 수 있음)"
+    return _cap(f"[OCR(사진→텍스트)] {path}\n{'-'*40}\n{text}", max_output) if len(text) > 0 else text
+
+
 TOOLS: Dict[str, ToolFn] = {
     "bash": _bash,
     "read_file": _read_file,
@@ -209,6 +359,10 @@ TOOLS: Dict[str, ToolFn] = {
     "edit_file": _edit_file,
     "list_dir": _list_dir,
     "grep_files": _grep_files,
+    "excel_summary": _excel_summary,
+    "excel_write": _excel_write,
+    "pdf_read": _pdf_read,
+    "image_ocr": _image_ocr,
     "remember": _remember,
     "recall": _recall,
     "forget": _forget,
@@ -222,6 +376,10 @@ SCHEMAS = {
     "edit_file": "args: {path:str, old_string:str, new_string:str, replace_all?:bool, whole_word?:bool} — 부분 치환 (whole_word=true면 단어 단위만)",
     "list_dir": "args: {path?:str} — 디렉터리 목록",
     "grep_files": "args: {pattern:str, path?:str, max_matches?:int} — 정규식 내용 검색",
+    "excel_summary": "args: {path:str, sheet?:str, max_rows?:int} — .xlsx 열제목/행/숫자합계 요약",
+    "excel_write": "args: {path:str, content:str} — Markdown 표를 .xlsx 시트로 저장",
+    "pdf_read": "args: {path:str} — PDF를 텍스트로 추출(pdftotext)",
+    "image_ocr": "args: {path:str, lang?:str(kor+eng)} — 사진/스캔 이미지를 OCR로 텍스트화",
     "remember": "args: {fact:str, max_len?:int} — 서버/시스템에서 파악한 사실을 오래 기억에 저장 (재방문 방지)",
     "recall": "args: {} — 지금까지 기억한 사실 목록 조회",
     "forget": "args: {} — 기억 전체 삭제",
