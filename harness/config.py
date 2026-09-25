@@ -20,7 +20,7 @@ class Config:
     model_fast: str = os.getenv("AGENT_MODEL_FAST", "gpt-4o-mini")
     model_smart: str = os.getenv("AGENT_MODEL_SMART", "gpt-4o")
     temperature: float = float(os.getenv("AGENT_TEMPERATURE", "0.1"))
-    max_tokens: int = int(os.getenv("AGENT_MAX_TOKENS", "2048"))
+    max_tokens: int = int(os.getenv("AGENT_MAX_TOKENS", "8192"))
     api_timeout: int = int(os.getenv("AGENT_API_TIMEOUT", "120"))
     api_retries: int = int(os.getenv("AGENT_API_RETRIES", "3"))
 
@@ -40,6 +40,7 @@ class Config:
     # --- 권한: yolo | balanced | strict ---
     permissions_mode: str = os.getenv("AGENT_PERMS", "balanced")
     auto_yes: bool = False  # CLI --yes
+    auto_smart: bool = os.getenv("AGENT_AUTO", "0") == "1"  # CLI --auto — 파괴 명령만 승인
     show_steps: bool = os.getenv("AGENT_SHOW_STEPS", "1") == "1"  # 과정 실시간 출력
     show_details: bool = os.getenv("AGENT_SHOW_DETAILS", "0") == "1"
     stream: bool = os.getenv("AGENT_STREAM", "1") == "1"

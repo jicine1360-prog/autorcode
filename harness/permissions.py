@@ -95,3 +95,17 @@ def check_write(mode: str):
     if mode == "strict":
         return "confirm", "strict 모드: 파일쓰기 승인 필요"
     return "allow", None
+
+
+# --- 자율 모드(--auto): 확인은 요구되지만 파괴적이지 않은 명령을 자동 승인한다 ---
+_DESTRUCTIVE = re.compile(
+    r"(rm\s+[^;|&]*(?:-[a-zA-Z]*[rf]|-[rf])\s+(?:/|~|\$HOME)\b"
+    r"|rm\s+-[a-zA-Z]*r[a-zA-Z]*f|mkfs|dd\s+[^;|&]*\bof=|shutdown|reboot|poweroff|halt\b"
+    r"|pkill|killall|kill\s+-9\s+(?:1\b|-1\b)|systemctl\s+(?:stop|disable|mask)\b"
+    r"|(?:curl|wget)\b[^;|]*\|\s*(?:sudo\s+)?(?:ba)?sh\b"
+    r"|git\s+push\s+[^;|]*(?:--force\b|-f\b)|chmod\s+-R|> ?/dev/[sh]d[a-z])", re.I)
+
+
+def is_destructive(cmd: str) -> bool:
+    """자율 모드에서 자동 승인을 거부할 명령인지 판별 (True=사람 확인 필요)."""
+    return bool(_DESTRUCTIVE.search(cmd))

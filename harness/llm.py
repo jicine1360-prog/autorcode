@@ -29,7 +29,7 @@ class LengthError(LLMError):
 
 class OpenAICompatibleLLM:
     def __init__(self, base_url: str, api_key: str, timeout: int,
-                 retries: int, temperature: float, max_tokens: int = 2048):
+                 retries: int, temperature: float, max_tokens: int = 8192):
         if not base_url.startswith(("http://", "https://")):
             raise LLMError(f"잘못된 base_url: {base_url!r}")
         self.endpoint = base_url.rstrip("/") + "/chat/completions"

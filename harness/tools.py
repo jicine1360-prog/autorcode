@@ -394,6 +394,12 @@ def schema_text() -> str:
 def execute(name: str, args: Args, root: str, max_output: int, timeout: int) -> str:
     fn = TOOLS.get(name)
     if fn is None:
+        try:
+            from . import mcp as mcp_mod
+            fn = mcp_mod.mcp_tool_fns().get(name)
+        except Exception:
+            fn = None
+    if fn is None:
         return f"[오류] 알 수 없는 도구: {name!r} (가능: {', '.join(TOOLS)})"
     if not isinstance(args, dict):
         args = {}

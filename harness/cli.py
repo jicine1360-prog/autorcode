@@ -198,6 +198,27 @@ def cmd_doctor(_args):
     if key:
         print(f"openrouter: 키 설정됨 (…{key[-4:]}) — '/' 모델(클라우드) 즉시 사용 가능")
     return 0
+def cmd_report(_args):
+    from harness import telegram
+    return telegram.run_report()
+
+
+def cmd_mcp(_args):
+    from harness import mcp as mcp_mod
+    print(f"설정     : {mcp_mod.CONFIG_PATH}")
+    servers = mcp_mod.mcp_servers()
+    if not servers:
+        print("등록된 MCP 서버 없음 — 예시:")
+        print('  {"mcpServers": {"filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "$HOME"]}}}')
+        return 0
+    total = 0
+    for name, tools in servers.items():
+        print(f"{name}: {len([t for t in tools if not t.startswith('[')])}개 도구")
+        for t in tools:
+            print(f"  - {t}")
+        total += len(tools)
+    print(f"합계 {total}개 도구 — 에이전트가 'mcp_<서버>_<도구>' 이름으로 호출")
+    return 0
 
 
 def _make_cfg(model: str, rest) -> config.Config:
@@ -207,6 +228,8 @@ def _make_cfg(model: str, rest) -> config.Config:
     cfg.model_smart = model
     if rest.yes:
         cfg.auto_yes = True
+    if getattr(rest, "auto", False):
+        cfg.auto_smart = True
     if getattr(rest, "quiet", False):
         cfg.show_steps = False
     if getattr(rest, "details", False):
@@ -258,7 +281,7 @@ def cmd_run(args):
             else config.load().model_fast
     cfg = _make_cfg(model, args)
     agent = agent_core.Agent(cfg, confirmer=_ask, progress=progress)
-    head = f"autorcode run {model}  (권한 {cfg.permissions_mode}{'/auto-yes' if cfg.auto_yes else ''})"
+    head = f"autorcode run {model}  (권한 {cfg.permissions_mode}{'/auto-yes' if cfg.auto_yes else ''}{'/자율' if getattr(cfg, 'auto_smart', False) else ''})"
 
     try:
         if prompt:
@@ -356,6 +379,7 @@ def main() -> int:
     p.add_argument("model", nargs="?", default="", help="ollama 모델명 (생략 시 로드/목록 우선)")
     p.add_argument("prompt", nargs="*", help="한 번 실행할 지시")
     p.add_argument("--yes", action="store_true", help="승인 자동")
+    p.add_argument("--auto", action="store_true", help="자율 모드 — 파괴적 명령만 승인, 나머지 자동")
     p.add_argument("--quiet", action="store_true", help="과정 출력 끔 (결과만)")
     p.add_argument("--details", action="store_true", help="도구 결과 미리보기 확대")
     p.add_argument("--no-stream", action="store_true", help="SSE 대신 일반 JSON 응답 사용")
@@ -371,6 +395,10 @@ def main() -> int:
     p.set_defaults(fn=cmd_chat)
     p = sub.add_parser("doctor", help="환경 진단")
     p.set_defaults(fn=cmd_doctor)
+    p = sub.add_parser("mcp", help="MCP 서버/도구 목록 (~/.autorcode/mcp.json)")
+    p.set_defaults(fn=cmd_mcp)
+    p = sub.add_parser("report", help="서버 상태 리포트 — 텔레그램 전송(토큰 있으면) 또는 stdout")
+    p.set_defaults(fn=cmd_report)
     p = sub.add_parser("help", help="전체 치트시트")
     p.set_defaults(fn=cmd_help)
 

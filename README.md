@@ -74,6 +74,34 @@ autorcode chat phi4              # 도구 없는 단순 채팅
 autorcode run                    # 인자 없음 → 로드된 모델 우선
 ```
 
+### 자율 모드 (--auto)
+파괴적 명령(rm -rf, pkill, curl|bash, shutdown 등)만 승인 요청하고 나머지는 자동 승인.
+```bash
+autorcode run --auto qwen3.8 "로그 정리 스크립트 만들어서 저장해줘"
+```
+(`--yes`는 전부 자동승인, `--auto`는 안전한 것만. 기본 승인모드는 AGENT_PERMS로 조정)
+
+### MCP 도구 생태계 연결
+`~/.autorcode/mcp.json`에 서버를 등록하면 남들 만든 MCP 도구를 그대로 사용한다.
+```json
+{ "mcpServers": { "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "$HOME"] } } }
+```
+```bash
+autorcode mcp                    # 연결된 서버/도구 목록
+```
+- 에이전트가 `mcp_<서버>_<도구>` 이름으로 자동 호출. ⚠️ MCP 도구는 autorcode 샌드박스를 우회하므로 신뢰하는 서버만 등록할 것.
+
+### 텔레그램 일일 리포트
+```bash
+autorcode report                 # 서버 상태 → 텔레그램 전송
+```
+- `~/.autorcode/telegram.json` (또는 환경변수) 설정:
+```json
+{ "token": "123456:ABC...", "chat": "123456789" }
+```
+- 매일 자동 보내기: `crontab -e` → `0 9 * * * /home/유저/.local/bin/autorcode report`
+- 토큰 미설정 시 stdout으로 대체 출력.
+
 ## GPU 없이 사용하기 (OpenRouter)
 ollama 대신 클라우드 API로 같은 에이전트 호출 — 모델명에 `/`를 넣으면 자동 라우팅됩니다.
 ```bash

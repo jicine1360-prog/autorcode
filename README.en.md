@@ -72,6 +72,34 @@ autorcode chat phi4              # plain chat, no tools
 autorcode run                    # no argument → uses the currently loaded model
 ```
 
+### Auto mode (--auto)
+Only destructive commands (rm -rf, pkill, curl|bash, shutdown, etc.) require approval; everything else runs automatically.
+```bash
+autorcode run --auto qwen3.8 "write a log cleanup script and save it"
+```
+(`--yes` auto-approves everything, `--auto` only safe ones. Default approval mode is set via AGENT_PERMS)
+
+### MCP tool ecosystem
+Register servers in `~/.autorcode/mcp.json` and autorcode uses third-party MCP tools directly.
+```json
+{ "mcpServers": { "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "$HOME"] } } }
+```
+```bash
+autorcode mcp                    # list connected servers/tools
+```
+- The agent calls them as `mcp_<server>_<tool>`. ⚠️ MCP tools bypass the autorcode sandbox — only register servers you trust.
+
+### Telegram daily report
+```bash
+autorcode report                 # server status → Telegram
+```
+- Configure `~/.autorcode/telegram.json` (or environment variables):
+```json
+{ "token": "123456:ABC...", "chat": "123456789" }
+```
+- Automatic daily: `crontab -e` → `0 9 * * * /home/user/.local/bin/autorcode report`
+- Without a token it prints to stdout instead.
+
 ## Using it without a GPU (OpenRouter)
 Call the same agent via a cloud API instead of ollama — a `/` in the model name auto-routes it.
 ```bash

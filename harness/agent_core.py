@@ -125,6 +125,10 @@ class Agent:
             if cfg.auto_yes:
                 self.progress.event(f"  [자동승인] {short(name)}")
                 return None
+            if getattr(cfg, "auto_smart", False) and name == "bash" \
+                    and not permissions.is_destructive(str(args.get("command", ""))):
+                self.progress.event(f"  [자율승인] {short(name)}")
+                return None
             self.progress.event(f"  [승인 대기] {tool_label(name, args)}")
             ok = self.confirmer(f"{name}: {json.dumps(args, ensure_ascii=False)[:200]}\n사유: {why}") \
                 if self.confirmer else False
