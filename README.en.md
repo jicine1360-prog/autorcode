@@ -38,6 +38,29 @@ autorcode help           # verify it works
 - If the command is not on PATH: `source ~/.bashrc` or re-login
 - System-wide install: `sudo bash install.sh /usr/local/bin`
 
+### Post-install verification (doctor)
+```bash
+autorcode doctor
+```
+Sample output:
+```text
+python   : 3.12.3  /usr/bin/python3
+cli 위치 : /home/younger/autorcode
+ollama   : http://127.0.0.1:11434 OK — models: 6, loaded ['qwen3.8:latest']
+메모리   : total 62GB / avail 48GB
+경고     : AGENT_BASE_URL/OLLAMA_HOST not set → autorcode run uses ollama default
+```
+- **Check/upgrade ollama**: `ollama --version` — to upgrade, just reinstall:
+  `curl -fsSL https://ollama.com/install.sh | sh && sudo systemctl restart ollama`
+- **If ollama is not running**: `sudo systemctl enable --now ollama`
+- The `AGENT_BASE_URL/OLLAMA_HOST not set` warning can be ignored (informational)
+- First run:
+  ```bash
+  autorcode list                    # list models
+  autorcode run qwen3.8 "check disk usage"   # run now (partial name matching)
+  ```
+- No reboot needed — just `source ~/.bashrc` (or re-login) to refresh PATH
+
 ## Usage
 ```bash
 autorcode help                   # full cheat-sheet

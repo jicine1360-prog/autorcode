@@ -40,6 +40,29 @@ autorcode help           # 동작 확인
 - PATH에 없으면: `source ~/.bashrc` 또는 재로그인
 - 시스템 전체 설치: `sudo bash install.sh /usr/local/bin`
 
+### 설치 후 확인 (doctor)
+```bash
+autorcode doctor
+```
+정상 출력 예시:
+```text
+python   : 3.12.3  /usr/bin/python3
+cli 위치 : /home/younger/autorcode
+ollama   : http://127.0.0.1:11434 OK — 모델 6개, 로드중 ['qwen3.8:latest']
+메모리   : total 62GB / avail 48GB
+경고     : AGENT_BASE_URL/OLLAMA_HOST 미설정 → autorcode run은 ollama 기본으로 동작
+```
+- **ollama 버전 확인/업그레이드**: `ollama --version` — 낮으면 재설치로 업그레이드:
+  `curl -fsSL https://ollama.com/install.sh | sh && sudo systemctl restart ollama`
+- **ollama가 꺼져 있으면**: `sudo systemctl enable --now ollama`
+- `AGENT_BASE_URL/OLLAMA_HOST 미설정` 경고는 무시해도 됨 (기본 설정 알림)
+- 첫 실행:
+  ```bash
+  autorcode list                    # 모델 목록 확인
+  autorcode run qwen3.8 "디스크 용량 봐줘"   # 바로 실행 (부분명 매칭)
+  ```
+- 리부팅은 불필요 — PATH 갱신(`source ~/.bashrc`)만으로 바로 사용 가능
+
 ## 사용
 ```bash
 autorcode help                   # 전체 치트시트
