@@ -29,9 +29,16 @@ openai 과금 없이 로컬 ollama로 도는 에이전트. 설치 한 번으로 
 
 ## 설치
 ```bash
-cd agent-harness && bash install.sh     # → ~/.local/bin/autorcode
+git clone https://github.com/jicine1360-prog/autorcode.git
+cd autorcode
+bash install.sh          # → ~/.local/bin/autorcode
+autorcode help           # 동작 확인
 ```
-요구사항: python3 (stdlib만). ollama 서버는 선택 — 없으면 OpenRouter로 동작.
+- **필수**: python **3.9 이상** (표준 라이브러리만 사용 — pip 설치 불필요)
+- **ollama는 선택**: 없으면 `autorcode list`에서 안내하고, OpenRouter 키만 있어도 동작
+- install.sh가 자동으로: python 버전 검증 → 심링크 생성 → 실행 검증 → ollama 연결 점검
+- PATH에 없으면: `source ~/.bashrc` 또는 재로그인
+- 시스템 전체 설치: `sudo bash install.sh /usr/local/bin`
 
 ## 사용
 ```bash

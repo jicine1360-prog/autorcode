@@ -27,9 +27,16 @@ An agent that runs on local Ollama without OpenAI charges. One install gives you
 
 ## Install
 ```bash
-cd agent-harness && bash install.sh     # → ~/.local/bin/autorcode
+git clone https://github.com/jicine1360-prog/autorcode.git
+cd autorcode
+bash install.sh          # → ~/.local/bin/autorcode
+autorcode help           # verify it works
 ```
-Requirements: python3 (stdlib only). The ollama server is optional — without it, everything routes through OpenRouter.
+- **Required**: Python **3.9+** (standard library only — no pip install needed)
+- **Ollama is optional**: without it `autorcode list` will guide you, and it works with just an OpenRouter key
+- install.sh automatically: checks Python version → creates symlink → verifies execution → checks Ollama connectivity
+- If the command is not on PATH: `source ~/.bashrc` or re-login
+- System-wide install: `sudo bash install.sh /usr/local/bin`
 
 ## Usage
 ```bash
