@@ -10,9 +10,13 @@ WorkingDirectory=/home/younger/autorcode
 # systemd 표준 방식인 EnvironmentFile 을 쓰면 git 에 비밀을 남기지 않는다.
 # 이 파일은 mode 600 이어야 한다.
 EnvironmentFile=/home/younger/.config/autorcode/bridge.env
-Environment=AGENT_WORKSPACE=/home/younger
+# workspace 를 홈 디렉터리로 두면 read_file/list_dir 이 허용 목록에 있어서
+# ~/.ssh/id_ed25519, ~/.autorcode/telegram.json 같은 샌드박스 밖 비밀까지 닿는다.
+# 브리지가 볼 필요가 있는 하위 디렉터리 하나로 좁힌다. 요청의 root 로도 이 밖으로
+# 나갈 수 없다(harness/bridge.py 의 _resolve_root).
+Environment=AGENT_WORKSPACE=/home/younger/autorcode
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 -m harness.bridge --host 127.0.0.1 --port 8787 --workspace /home/younger
+ExecStart=/usr/bin/python3 -m harness.bridge --host 127.0.0.1 --port 8787 --workspace /home/younger/autorcode
 Restart=on-failure
 RestartSec=3
 
