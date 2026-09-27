@@ -320,6 +320,14 @@ def build_from_config(path: str = CONFIG_PATH) -> Optional[ApprovalGate]:
     여기서 예외를 던지지 않는 이유: 게이트를 못 만든 것과 승인을 거부한 것은
     관점에서 같기 때문이다(둘 다 '실행하지 않음'). 경고는 로그로 남긴다.
     """
+    # 설정 파일이 없는 것과 설정이 잘못된 것은 다른 사건이다. 없는 쪽은
+    # "텔레그램 승인을 쓰지 않는다"는 정상 설정이라 WARNING 으로 올리면 안 된다 —
+    # 대부분의 사용자에게는 늘 그렇고, 경고가 stderr 로 새어 --quiet 도 깨뜨린다.
+    # 있으면 잘못된 것이므로 그때는 WARNING 을 유지한다.
+    if not os.path.exists(path):
+        log.info("승인 게이트 미사용: 텔레그램 설정 없음 (%s)", path)
+        return None
+
     try:
         cfg = load_config(path)
     except GateUnavailable as e:

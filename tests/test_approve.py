@@ -4,6 +4,7 @@
 성공 케이스보다 실패 케이스를 더 많이 검증한다 — 게이트는 닫혀야만 안전하다.
 """
 import json
+import logging
 import os
 import stat
 import tempfile
@@ -100,6 +101,31 @@ class GateConfigTest(unittest.TestCase):
     def test_build_returns_none_when_unusable(self):
         # 예외 대신 None — 관점에서 '거부'와 동일하므로 조용히 넘어간다.
         self.assertIsNone(approve.build_from_config(os.path.join(self.tmp, "nope.json")))
+
+    def _log_level(self, path):
+        """build_from_config 가 남긴 로그의 최고 수준. None 이면 아무것도 안 남김."""
+        with self.assertLogs("agent.approve", level="DEBUG") as cap:
+            approve.build_from_config(path)
+        levels = {r.levelno for r in cap.records}
+        return max(levels) if levels else None
+
+    def test_absent_config_is_info_not_warning(self):
+        # 설정이 없다는 건 정상이다(텔레그램 안 쓰는 다수가 정상이다). WARNING 으로
+        # 올리면 stderr 가 새어 'quiet 는 조용해야 한다' 를 깨고, 텔레그램 미설정
+        # 사용자의 헤드리스 실행마다 경고가 쌓인다. 로컬에 telegram.json 이 있는 개발자
+        # 에게는 이 문제가 invisible 이어서 CI 에서만 터졌다.
+        self.assertLess(self._log_level(os.path.join(self.tmp, "nope.json")),
+                        logging.WARNING)
+
+    def test_broken_config_still_warns(self):
+        # 반대로 '있는데 못 쓴다'는 설정 오류다. 조용히 삼키면 안 된다 — 사용자는
+        # headless 인 줄 모르고 모든 승인이 조용히 거부되는 걸 모른다.
+        p = os.path.join(self.tmp, "loose.json")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"token": "1:AA", "allowedChatIds": [1]}, f)
+        os.chmod(p, 0o644)
+        self.addCleanup(os.chmod, p, 0o600)
+        self.assertGreaterEqual(self._log_level(p), logging.WARNING)
 
 
 class GateTest(unittest.TestCase):
