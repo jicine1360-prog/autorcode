@@ -207,11 +207,21 @@ from the browser. The host bridge (`harness/bridge.py`) runs tools on 127.0.0.1 
 a Bearer token; the existing sandbox, RLIMIT and SSRF guards still apply.
 
 ```bash
-# Run the bridge as a service (token via env or ~/autorcode/bridge.token)
-AUTORCODE_BRIDGE_TOKEN=<secret> python3 -m harness.bridge --port 8787 --workspace /home/hoony
-curl -X POST http://127.0.0.1:8787/tool -H "Authorization: Bearer <secret>" \
-  -d '{"tool":"list_dir","args":{},"root":"/home/hoony"}'
+# Run the bridge as a service. Do not hardcode the token in the unit file — it ends
+# up in git history (it has already leaked once). Use systemd's EnvironmentFile.
+umask 077 && mkdir -p ~/.config/autorcode
+printf 'AUTORCODE_BRIDGE_TOKEN=%s\n' "$(python3 -c 'import secrets;print(secrets.token_hex(32))')" \
+  > ~/.config/autorcode/bridge.env
+
+sudo systemctl enable --now autorcode-bridge   # reads EnvironmentFile= above
 ```
+
+- **Token loading**: `harness/bridge.py` reads the **environment variable only**. The
+  `~/autorcode/bridge.token` file loader this README used to mention was never
+  implemented. Use systemd's `EnvironmentFile=` instead — no code change needed.
+- **Do not use your home directory as `--workspace`**: `read_file` and `list_dir` are
+  allowed, so `--workspace /home/you` exposes `~/.ssh` and `~/.gnupg`. Point it at a
+  single subdirectory the job actually needs.
 
 - **Bridge tools**: file read/edit, web search/fetch, YouTube subtitles,
   **Excel (.xlsx) create/summary**, **PDF text extraction (pdftotext)**,

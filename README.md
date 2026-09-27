@@ -236,11 +236,26 @@ autorcode 도구를 호출할 수 있습니다. 호스트 브리지(`harness/bri
 그대로 적용됩니다.
 
 ```bash
-# 브리지를 systemd로 운영 (토큰은 ~/autorcode/bridge.token 또는 환경변수)
-AUTORCODE_BRIDGE_TOKEN=<비밀> python3 -m harness.bridge --port 8787 --workspace /home/hoony
-curl -X POST http://127.0.0.1:8787/tool -H "Authorization: Bearer <비밀>" \
-  -d '{"tool":"list_dir","args":{},"root":"/home/hoony"}'
+# 브리지를 systemd로 운영. 토큰은 유닛 파일에 두지 말고 EnvironmentFile 로 넘긴다.
+# (앞으로 여기 하드코딩하면 git 히스토리에 남는다 — 실제로 한 번 유출됐다.)
+umask 077 && mkdir -p ~/.config/autorcode
+printf 'AUTORCODE_BRIDGE_TOKEN=%s\n' "$(python3 -c 'import secrets;print(secrets.token_hex(32))')" \
+  > ~/.config/autorcode/bridge.env
+
+# systemd/autorcode-bridge.service 는 EnvironmentFile=~/.config/autorcode/bridge.env 를 읽는다
+sudo systemctl enable --now autorcode-bridge
+
+curl -X POST http://127.0.0.1:8787/tool \
+  -H "Authorization: Bearer $(sed -n 's/^AUTORCODE_BRIDGE_TOKEN=//p' ~/.config/autorcode/bridge.env)" \
+  -d '{"tool":"list_dir","args":{"path":"."}}'
 ```
+
+- **토큰 로딩**: `harness/bridge.py` 는 **환경변수만** 읽는다. README 에 적혀 있던
+  `~/autorcode/bridge.token` 파일 로더는 구현돼 있지 않다(문서/코드 불일치).
+  파일이 필요하면 systemd `EnvironmentFile=` 을 쓰면 코드 변경이 필요 없다.
+- **workspace 를 홈 디렉터리로 두지 마세요**: `read_file`/`list_dir` 이 허용 목록에 있어
+  `--workspace /home/ユーザー` 면 `~/.ssh`, `~/.gnupg` 가 전부 노출된다.
+  작업에 필요한 하위 디렉터리 하나를 workspace 로 지정할 것.
 
 - **브리지 도구**: 파일 조회·수정 / 웹검색·웹페이지 / 유튜브 자막 / **엑셀(.xlsx) 생성·요약** /
   **PDF 텍스트 추출(pdftotext)** / **이미지 OCR(tesseract)** / 영구 기억(remember/recall/forget)
