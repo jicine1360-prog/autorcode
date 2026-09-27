@@ -14,7 +14,7 @@ import logging
 import os
 import sys
 
-from harness import config
+from harness import approve, config
 
 
 def main() -> int:
@@ -56,7 +56,11 @@ def main() -> int:
         ans = input(f"\n[승인?] {why}\n  허용하시겠어요? [y/N] ").strip().lower()
         return ans in ("y", "yes", "ㄱ")
 
-    agent = Agent(cfg, confirmer=ask if sys.stdin.isatty() else None)
+    # TTY 가 있으면 터미널로, 없으면 텔레그램으로, 그것도 없으면 None(=전부 거부).
+    # None 일 때 Agent 는 확인을 요구하는 호출을 전부 거부하므로 fail-closed 다.
+    confirmer = ask if sys.stdin.isatty() else approve.build_from_config()
+
+    agent = Agent(cfg, confirmer=confirmer)
 
     if args.task:
         print(agent.run(args.task))

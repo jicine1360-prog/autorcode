@@ -19,7 +19,7 @@ import urllib.request
 _HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))
 
-from harness import agent_core, config, llm, tools  # noqa: E402
+from harness import agent_core, approve, config, llm, tools  # noqa: E402
 from harness.progress import Progress, short  # noqa: E402
 
 
@@ -221,6 +221,22 @@ def cmd_mcp(_args):
     return 0
 
 
+def _confirmer(progress=None):
+    """승인 경로를 고른다. 순서: 터미널 → 텔레그램 → 없음(=전부 거부).
+
+    TTY 가 있을 땐 터미널을 먼저 쓴다. 폰 승인 게이트는 폴러 스레드와 타임아웃이
+    있어서 방해가 되고, TTY 가 없는 환경(systemd, bridge)에서만 가치가 있다.
+    """
+    if sys.stdin.isatty():
+        return _ask
+    gate = approve.build_from_config()
+    if gate is None:
+        return None
+    if progress is not None:
+        progress.event("  [승인 경로] 텔레그램 (포트 열지 않음)")
+    return gate
+
+
 def _make_cfg(model: str, rest) -> config.Config:
     cfg = config.load()
     cfg.base_url, cfg.api_key = _resolve_backend(model)
@@ -280,7 +296,7 @@ def cmd_run(args):
         model = sorted(pool, key=lambda n: (n not in loaded, n))[0] if pool \
             else config.load().model_fast
     cfg = _make_cfg(model, args)
-    agent = agent_core.Agent(cfg, confirmer=_ask, progress=progress)
+    agent = agent_core.Agent(cfg, confirmer=_confirmer(progress), progress=progress)
     head = f"autorcode run {model}  (권한 {cfg.permissions_mode}{'/auto-yes' if cfg.auto_yes else ''}{'/자율' if getattr(cfg, 'auto_smart', False) else ''})"
 
     try:

@@ -102,6 +102,35 @@ autorcode report                 # 서버 상태 → 텔레그램 전송
 - 매일 자동 보내기: `crontab -e` → `0 9 * * * /home/유저/.local/bin/autorcode report`
 - 토큰 미설정 시 stdout으로 대체 출력.
 
+### 텔레그램 원격 승인 (TTY 없는 환경)
+
+`agent.py` 는 TTY 가 없으면 `confirmer=None` 이고, bridge 는 항상 `False` 다.
+fail-closed 라서 틀리진 않지만, systemd 로 띄운 환경에서는 승인 필요한 작업을
+**하나도 못 한다**. 텔레그램 승인 게이트는 그 공백을 **포트를 열지 않고** 메운다.
+
+`~/.autorcode/telegram.json` 에 `allowedChatIds` 를 넣으면 켜진다
+(`chat` 하나만 있어도 목록 크기 1로 승격된다):
+
+```json
+{ "token": "123456:ABC...", "chat": "123456789",
+  "allowedChatIds": [123456789], "approveTimeout": 180 }
+```
+
+동작 방식:
+- 승인이 필요한 도구가 나오면 폰으로 `승인` / `거부` 버튼이 도착하고 **기다린다**
+- 타임아웃(기본 180초)이 지나면 **거부** — 오래된 승인은 사고가 된다
+- nonce 는 한 번만 쓰이고, 응답자가 허용 목록에 있어야 하며, 보낸 chat과 일치해야 한다
+- 설정이 없거나 토큰 파일 권한이 느슨하면 게이트는 **애초에 열리지 않는다** (전부 거부)
+
+`chmod 600 ~/.autorcode/telegram.json` 을 반드시 지킬 것. 리포트가 새는 것과
+승인 권한이 새는 것은 다르다.
+
+TTY 가 있는 터미널에서는 기존처럼 `y/N` 으로 묻는다 — 게이트는 TTY 없을 때만 쓴다.
+
+> ⚠️ systemd 로 띄우는 서비스라면 주의: 예전엔 승인 필요한 작업이 **즉시 거부**됐지만
+> 이제는 **폰 응답을 기다린다**. `approveTimeout` 이 서비스의 `TimeoutSec` 보다 짧아야
+> 그렇지 않으면 잡이 타임아웃으로 죽는다. 게이트가 켜진 사실은 로그에 남는다.
+
 ## GPU 없이 사용하기 (OpenRouter)
 ollama 대신 클라우드 API로 같은 에이전트 호출 — 모델명에 `/`를 넣으면 자동 라우팅됩니다.
 ```bash
