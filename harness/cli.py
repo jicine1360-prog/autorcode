@@ -221,12 +221,41 @@ def cmd_mcp(_args):
     return 0
 
 
-def _confirmer(progress=None):
-    """승인 경로를 고른다. 순서: 터미널 → 텔레그램 → 없음(=전부 거부).
+def _confirmer(progress=None, mode="auto"):
+    """승인 경로를 고른다.
 
-    TTY 가 있을 땐 터미널을 먼저 쓴다. 폰 승인 게이트는 폴러 스레드와 타임아웃이
-    있어서 방해가 되고, TTY 가 없는 환경(systemd, bridge)에서만 가치가 있다.
+    mode:
+      auto     TTY → 텔레그램 → 없음(=전부 거부). 기본.
+      telegram 텔레그램 강제. TTY 에서 돌려도 폰으로 승인받는다.
+      tty      터미널 강제. 텔레그램 설정을 있어도 쓰지 않는다.
+      deny     승인 자체를 금지. 확인이 필요한 호출은 전부 거부된다.
+
+    auto 가 기본인 이유: 폰 게이트는 폴러 스레드와 타임아웃이 있어서 방해가 되고,
+    TTY 가 없는 환경(systemd, bridge)에서만 값어치가 있다. 하지만 터미널에서
+    작업을 던져놓고 폰으로 승인하는 workflow 도 있으므로 telegram 으로 강제할 수
+    있게 해 둔다.
     """
+    if mode == "tty":
+        return _ask
+    if mode == "deny":
+        return None
+    if mode == "telegram":
+        gate = approve.build_from_config()
+        if gate is None:
+            # 텔레그램을 강제했는데 못 쓰면 조용히 거부로 넘어가면 안 된다.
+            # 승인을 기다릴 것 같았는데 아무 것도 안 오는 상황이 최악이다.
+            raise SystemExit(
+                "[오류] --approve telegram 을 지정했지만 승인 게이트를 쓸 수 없습니다. "
+                "텔레그램 설정(~/autorcode/telegram.json)을 확인하세요. "
+                "설정 없이 진행하면 승인이 필요한 작업은 전부 거부됩니다."
+            )
+        if progress is not None:
+            progress.event("  [승인 경로] 텔레그램 (포트 열지 않음)")
+        return gate
+    if mode != "auto":
+        raise SystemExit(f"[오류] --approve 값이 잘못됨: {mode!r} "
+                         "(auto|telegram|tty|deny)")
+
     if sys.stdin.isatty():
         return _ask
     gate = approve.build_from_config()
@@ -296,7 +325,7 @@ def cmd_run(args):
         model = sorted(pool, key=lambda n: (n not in loaded, n))[0] if pool \
             else config.load().model_fast
     cfg = _make_cfg(model, args)
-    agent = agent_core.Agent(cfg, confirmer=_confirmer(progress), progress=progress)
+    agent = agent_core.Agent(cfg, confirmer=_confirmer(progress, getattr(args, "approve", "auto")), progress=progress)
     head = f"autorcode run {model}  (권한 {cfg.permissions_mode}{'/auto-yes' if cfg.auto_yes else ''}{'/자율' if getattr(cfg, 'auto_smart', False) else ''})"
 
     try:
@@ -395,6 +424,10 @@ def main() -> int:
     p.add_argument("model", nargs="?", default="", help="ollama 모델명 (생략 시 로드/목록 우선)")
     p.add_argument("prompt", nargs="*", help="한 번 실행할 지시")
     p.add_argument("--yes", action="store_true", help="승인 자동")
+    p.add_argument("--approve", choices=("auto", "telegram", "tty", "deny"), default="auto",
+                   help="승인 경로 (기본 auto: TTY→텔레그램→거부). "
+                        "telegram=터미널이어도 폰으로, tty=텔레그램 있어도 터미널, "
+                        "deny=전부 거부")
     p.add_argument("--auto", action="store_true", help="자율 모드 — 파괴적 명령만 승인, 나머지 자동")
     p.add_argument("--quiet", action="store_true", help="과정 출력 끔 (결과만)")
     p.add_argument("--details", action="store_true", help="도구 결과 미리보기 확대")

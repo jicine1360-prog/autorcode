@@ -38,7 +38,22 @@ API_BASE = os.getenv("AUTORCODE_TELEGRAM_API", "https://api.telegram.org")
 
 # 승인을 기다리는 시간. 이 시간이 지나면 거부로 처리한다. 오래된 승인은 위험하다 —
 # 사용자가 폰을 들고 산책하다 30분 뒤에 approving 하는 일은 사고가 된다.
-DEFAULT_TIMEOUT = int(os.getenv("AUTORCODE_APPROVE_TIMEOUT", "180"))
+DEFAULT_TIMEOUT = 180
+
+
+def _resolve_timeout(data: dict) -> int:
+    """승인 대기시간 결정. 우선순위: 환경변수 > 설정 파일 > 기본값.
+
+    환경변수가 이긴다는 게 의도다. systemd 의 Environment= 처럼 특정 배포에서만
+    다른 값이 필요할 때 설정 파일을 고칠 필요 없이 배포 단위로 덮어쓸 수 있다.
+    파일이 이기도록 두면, Environment= 로 90초를 지정한 서비스가 조용히 파일의
+    180초를 쓰게 되어 "설정은 바꿨는데 왜 안 바뀌지" 하는 일이 된다. 실제로
+    그랬다 — data.get("approveTimeout", DEFAULT_TIMEOUT) 은 파일이 항상 이겼다.
+    """
+    env = os.getenv("AUTORCODE_APPROVE_TIMEOUT", "").strip()
+    if env:
+        return int(env)
+    return int(data.get("approveTimeout", DEFAULT_TIMEOUT))
 
 # 텔레그램 sendMessage 본문 상한(4096). 여유를 둔다.
 _TEXT_LIMIT = 3500
@@ -95,7 +110,7 @@ def load_config(path: str = CONFIG_PATH) -> dict:
     return {
         "token": token,
         "allowed": allowed,
-        "timeout": int(data.get("approveTimeout", DEFAULT_TIMEOUT)),
+        "timeout": _resolve_timeout(data),
     }
 
 

@@ -72,6 +72,46 @@ def _config(tmp, **extra):
     return d
 
 
+class TimeoutPrecedenceTest(unittest.TestCase):
+    """승인 대기시간 우선순위. systemd Environment= 로 지정한 값이 실제로 쓰여야 한다."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self._prev = os.environ.get("AUTORCODE_APPROVE_TIMEOUT")
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        if self._prev is None:
+            os.environ.pop("AUTORCODE_APPROVE_TIMEOUT", None)
+        else:
+            os.environ["AUTORCODE_APPROVE_TIMEOUT"] = self._prev
+
+    def _load(self, **extra):
+        return approve.load_config(_config(self.tmp, **extra))["timeout"]
+
+    def test_file_value_is_used_when_env_absent(self):
+        os.environ.pop("AUTORCODE_APPROVE_TIMEOUT", None)
+        self.assertEqual(self._load(approveTimeout=90), 90)
+
+    def test_env_overrides_file(self):
+        # 배포 단위 override. 이게 안 먹으면 systemd Environment= 가 조용히 무시된다.
+        os.environ["AUTORCODE_APPROVE_TIMEOUT"] = "45"
+        self.assertEqual(self._load(approveTimeout=300), 45)
+
+    def test_env_used_when_file_has_no_value(self):
+        os.environ["AUTORCODE_APPROVE_TIMEOUT"] = "45"
+        self.assertEqual(self._load(), 45)
+
+    def test_default_when_neither_given(self):
+        os.environ.pop("AUTORCODE_APPROVE_TIMEOUT", None)
+        self.assertEqual(self._load(), approve.DEFAULT_TIMEOUT)
+
+    def test_blank_env_falls_back_to_file(self):
+        # 빈 문자열은 '지정 안 함' 이다. int("") 는 ValueError 이므로 방어해야 한다.
+        os.environ["AUTORCODE_APPROVE_TIMEOUT"] = "   "
+        self.assertEqual(self._load(approveTimeout=120), 120)
+
+
 class GateConfigTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()

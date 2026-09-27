@@ -23,6 +23,11 @@ def main() -> int:
     ap.add_argument("--provider", choices=["ollama", "openai"],
                     help="llm 프리셋 (ollama=http://127.0.0.1:11434/v1)")
     ap.add_argument("--yes", action="store_true", help="확인 승인 자동화")
+    ap.add_argument("--approve", choices=["auto", "telegram", "tty", "deny"],
+                    default="auto",
+                    help="승인 경로 (기본 auto: TTY→텔레그램→거부). "
+                         "telegram=터미널이어도 폰으로, tty=텔레그램 있어도 터미널, "
+                         "deny=전부 거부")
     ap.add_argument("--session", help="히스토리 jsonl 저장/재개")
     ap.add_argument("--tools", action="store_true", help="도구 목록")
     ap.add_argument("--verbose", action="store_true")
@@ -56,9 +61,24 @@ def main() -> int:
         ans = input(f"\n[승인?] {why}\n  허용하시겠어요? [y/N] ").strip().lower()
         return ans in ("y", "yes", "ㄱ")
 
-    # TTY 가 있으면 터미널로, 없으면 텔레그램으로, 그것도 없으면 None(=전부 거부).
-    # None 일 때 Agent 는 확인을 요구하는 호출을 전부 거부하므로 fail-closed 다.
-    confirmer = ask if sys.stdin.isatty() else approve.build_from_config()
+    # 승인 경로: 자동(TTY→텔레그램→거부) 또는 명시적 지정. cli.run 의 --approve 와
+    # 같은 선택지라 한쪽에서 배운 것을 다른 쪽에서도 그대로 쓸 수 있다.
+    mode = getattr(args, "approve", "auto")
+    if mode == "tty":
+        confirmer = ask
+    elif mode == "deny":
+        confirmer = None
+    elif mode in ("auto", "telegram"):
+        confirmer = ask if (mode == "auto" and sys.stdin.isatty()) \
+            else approve.build_from_config()
+        if confirmer is None and mode == "telegram":
+            print("[오류] --approve telegram 을 지정했지만 승인 게이트를 쓸 수 "
+                  "없습니다. 텔레그램 설정(~/autorcode/telegram.json)을 확인하세요.",
+                  file=sys.stderr)
+            return 2
+    else:
+        print(f"[오류] --approve 값이 잘못됨: {mode!r}", file=sys.stderr)
+        return 2
 
     agent = Agent(cfg, confirmer=confirmer)
 
