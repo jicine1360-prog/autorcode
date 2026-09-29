@@ -106,8 +106,15 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     port = int(os.environ.get("PCGATE_PORT", "8791"))
-    srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    print(f"pcgate listening on :{port} (allowed: {sorted(ALLOWED)})", flush=True)
+    # 바인딩 주소는 환경변수로 지정한다. 기본값을 0.0.0.0 으로 둔 것은 의도적이다 —
+    # 이 포트는 같은 호스트의 Open WebUI(PCGATE_URL=http://127.0.0.1:8791)와
+    # tailnet 의 Windows PC 가 함께 쓴다. 127.0.0.1 로만 좁히면 웹UI 쪽이 끊기고,
+    # tailnet 주소로 좁히면 공인 IP 로 붙던 PC 가 끊긴다. 어느 쪽이 실제로 붙는지는
+    # 로그가 없어(log_message 를 끔) 서버 쪽에서 확인할 수 없다. 그래서 기본값은
+    # 그대로 두고, 좁히려면 PCGATE_HOST 를 명시적으로 지정하게 한다.
+    host = os.environ.get("PCGATE_HOST", "0.0.0.0")
+    srv = ThreadingHTTPServer((host, port), Handler)
+    print(f"pcgate listening on {host}:{port} (allowed: {sorted(ALLOWED)})", flush=True)
     srv.serve_forever()
 
 
