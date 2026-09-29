@@ -511,6 +511,7 @@ SCHEMAS = {
     "edit_file": "args: {path:str, old_string:str, new_string:str, replace_all?:bool, whole_word?:bool} — 부분 치환 (whole_word=true면 단어 단위만)",
     "list_dir": "args: {path?:str} — 디렉터리 목록",
     "grep_files": "args: {pattern:str, path?:str, max_matches?:int} — 정규식 내용 검색",
+    "system_info": "args: {section?:'all'|'host'|'cpu'|'mem'|'gpu'|'models'|'disk'} — 지금 실행 중인 기기의 라이브 상태(CPU/RAM/GPU VRAM/상주 모델/디스크). 설치 목록이 아니라 구동 중 값",
     "excel_summary": "args: {path:str, sheet?:str, max_rows?:int} — .xlsx 열제목/행/숫자합계 요약",
     "excel_write": "args: {path:str, content:str} — Markdown 표를 .xlsx 시트로 저장",
     "pdf_read": "args: {path:str} — PDF를 텍스트로 추출(pdftotext)",

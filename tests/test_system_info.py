@@ -15,6 +15,33 @@ class SystemInfoTest(unittest.TestCase):
         from harness import bridge
         self.assertIn("system_info", bridge.ALLOW_LIST)
 
+    def test_has_schema_description(self):
+        # ALLOW_LIST 에 있어도 SCHEMAS 에 설명이 없으면 /tools/show 목록에서
+        # 조용히 사라진다. 실제로 이 형태로 한 번 빠진 적이 있다.
+        self.assertIn("system_info", tools.SCHEMAS)
+        self.assertIn("section", tools.SCHEMAS["system_info"])
+
+    def test_every_registered_tool_has_a_schema(self):
+        # TOOLS 와 SCHEMAS 는 서로 다른 dict 라 서로 조용히 어긋난다.
+        # 새로 도구를 붙일 때 설명을 빠뜨리지 못하게 여기서 막는다.
+        missing = sorted(set(tools.TOOLS) - set(tools.SCHEMAS))
+        self.assertEqual(missing, [], f"구현은 됐지만 설명이 없는 도구: {missing}")
+
+    def test_allow_list_only_references_callable_tools(self):
+        # ALLOW_LIST 에는 있는데 브리지에 구현이 없는 이름이 있다. 웹UI 도구가
+        # _call 로 프록시하므로 호출하면 '알 수 없는 도구' 로 실패한다 — 실제로
+        # 깨진 경로다. TODO 로 여기 남겨두면 고치는 시점에 테스트가 알려준다.
+        from harness import bridge, mcp
+        available = set(tools.TOOLS) | set(mcp.mcp_tool_fns())
+        # 웹UI 측 자체 구현이라 브리지로 오지 않는 이름
+        local_only = {"support_status", "service_intro"}
+        known_gaps = {"find_files", "disk_usage"}  # TODO: 브리지 구현 추가
+        unknown = sorted(bridge.ALLOW_LIST - available - local_only)
+        self.assertEqual(
+            unknown, sorted(known_gaps),
+            f"알 수 없는 허용 도구 변경됨. 브리지 구현 추가 후 known_gaps 에서 빼세요: {unknown}")
+        self.assertTrue(local_only.isdisjoint(available))
+
     def test_default_reports_live_sections(self):
         out = self._info()
         for tag in ("[호스트]", "[CPU]", "[메모리]", "[GPU]", "[모델]", "[디스크]"):
