@@ -221,9 +221,10 @@ printf 'AUTORCODE_BRIDGE_TOKEN=%s\n' "$(python3 -c 'import secrets;print(secrets
 systemctl --user enable --now autorcode-bridge-v2
 ```
 
-- **Approval gate**: `bash`/`write_file`/`edit_file` are judged by `AGENT_PERMS`
-  (default `balanced`); anything needing confirmation is handed to the Telegram
-  gate in `harness/approve.py`. If no gate is configured
+- **Approval gate**: the deployed WebUI bridge uses `AGENT_PERMS=strict`;
+  `bash`/`write_file`/`edit_file` changes require Telegram approval through
+  `harness/approve.py`. The CLI default remains `balanced`.
+  If no gate is configured
   (`~/.autorcode/telegram.json` missing), **every action requiring confirmation is
   refused** (fail-closed). The web path applies the same check — it is not enough
   to gate `/run`.
@@ -239,9 +240,16 @@ systemctl --user enable --now autorcode-bridge-v2
 
 - **Bridge tools**: file read/edit, web search/fetch, YouTube subtitles,
   **Excel (.xlsx) create/summary**, **PDF text extraction (pdftotext)**,
-  **image OCR (tesseract)**, persistent memory (remember/recall/forget).
+  **image OCR (tesseract)**, live `system_info`, persistent memory (remember/recall/forget).
 - **Note**: the bridge binds to localhost by default; if exposed, put it behind
   auth (authelia etc.) and rotate the token.
+- **PC gate (8791)**: `~/.autorcode/pcgate.token` must be mode `600`; the service
+  refuses to start with a missing or loose-permission token. Authentication uses a
+  constant-time comparison, request/response sizes, PC slots/queues/results and
+  failed-auth attempts are bounded, and access logs record client IPs while redacting query tokens. It still
+  binds to `0.0.0.0` until the Windows PC's route is confirmed; then restrict it to
+  Tailnet/known IPs. `restart`/`shutdown`/`sleep` are denied by default; explicitly
+  set `PCGATE_DANGEROUS_ENABLED=1` only if needed (`confirm=true` alone is not approval).
 
 ## License
 MIT

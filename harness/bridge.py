@@ -86,9 +86,9 @@ def _resolve_root(requested: str) -> str:
 
 ALLOW_LIST = {"web_search", "web_fetch", "youtube", "read_file", "list_dir",
               "grep_files", "bash", "write_file", "edit_file", "system_info",
+              "service_status", "process_list", "service_logs",
               "excel_summary", "excel_write", "pdf_read", "image_ocr",
-              "remember", "recall", "forget", "find_files", "disk_usage",
-              "support_status", "service_intro"}
+              "remember", "recall", "forget", "find_files", "disk_usage"}
 
 
 class Handler(BaseHTTPRequestHandler):

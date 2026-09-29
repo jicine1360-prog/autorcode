@@ -53,7 +53,7 @@ class Tools:
             description="PC 게이트 주소 (Windows PC 에이전트 명령 큐)",
         )
         PCGATE_TOKEN: str = Field(
-            default="bde4ee9d179781029f638641b99f921e1e316b3e3b09e7e7",
+            default="",
             description="PC 게이트 토큰 — 호스트 ~/.autorcode/pcgate.token",
         )
 
@@ -96,6 +96,75 @@ class Tools:
         if not data.get("ok"):
             return f"[오류] {data.get('error', '알 수 없는 오류')}"
         return data.get("result", "")
+
+    async def _run_server_agent(self, prompt: str, timeout: int = 600) -> str:
+        token = self._token or self.valves.BRIDGE_TOKEN or os.getenv(
+            "AUTORCODE_BRIDGE_TOKEN", ""
+        )
+        if not token:
+            return "[설정오류] BRIDGE_TOKEN 미설정 — 호스트 EnvironmentFile/Valves 확인"
+        body = json.dumps({"prompt": prompt}, ensure_ascii=False).encode()
+        req = urllib.request.Request(
+            f"{self.valves.BRIDGE_URL}/run",
+            data=body,
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+            method="POST",
+        )
+        try:
+            return await asyncio.to_thread(self._post_run, req, timeout)
+        except Exception as e:
+            return f"[서버 관리 에이전트 연결 실패] {type(e).__name__}: {e}"
+
+    @staticmethod
+    def _post_run(req: urllib.request.Request, timeout: int) -> str:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+        if not data.get("ok"):
+            return f"[오류] {data.get('error', '알 수 없는 오류')}"
+        result = data.get("result", "")
+        return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+
+    # ---------------- 중앙 서버 관리 (woojintower host) ----------------
+
+    async def server_info(self, section: str = "all") -> str:
+        """이 웹UI를 실행하는 중앙 서버의 현재 상태. 브라우저 접속 기기가 아닌 서버를 조회한다.
+        - section: all/host/cpu/mem/gpu/models/disk 중 하나
+        """
+        return await self._call("system_info", {"section": section}, timeout=30)
+
+    async def server_services(self, state: str = "all") -> str:
+        """중앙 서버의 사용자 systemd 서비스 상태를 읽는다 (all/active/failed/inactive)."""
+        return await self._call("service_status", {"state": state}, timeout=30)
+
+    async def server_processes(self, limit: int = 15) -> str:
+        """중앙 서버에서 현재 실행 중인 상위 CPU 프로세스를 조회한다."""
+        return await self._call("process_list", {"limit": limit}, timeout=20)
+
+    async def server_service_logs(self, service: str, lines: int = 50) -> str:
+        """중앙 서버의 사용자 서비스 로그를 조회한다. 토큰/API 키 패턴은 결과에서 마스킹된다."""
+        return await self._call("service_logs", {"service": service, "lines": lines}, timeout=30)
+
+    async def server_task(self, task: str) -> str:
+        """중앙 서버(woojintower)의 파일·서비스·소프트웨어 관리 요청.
+
+        읽기 작업은 실행하고, 파일 변경/서비스 조작/설치 등 변경 작업은
+        호스트의 strict 권한 정책과 텔레그램 승인 게이트를 반드시 거친다.
+        브라우저를 실행 중인 휴대폰/PC는 대상으로 하지 않는다.
+        - task: 원하는 서버 관리 작업을 자연어로 설명 (최대 3000자)
+        """
+        task = str(task or "").strip()
+        if not task:
+            return "[오류] task에 서버 작업을 적어주세요"
+        if len(task) > 3000:
+            return "[오류] task는 최대 3000자입니다"
+        prompt = (
+            "사용자가 Open WebUI를 호스팅하는 중앙 서버 자체에 요청한 관리 작업이다. "
+            "브라우저 접속 클라이언트는 대상이 아니다. 읽기부터 수행하고, "
+            "파일 변경·서비스 변경·소프트웨어 설치 등 모든 변경은 권한 정책과 "
+            "텔레그램 승인 게이트를 통과해야 한다. 승인 우회나 비밀값 출력은 하지 않는다.\n\n"
+            f"사용자 요청: {task}"
+        )
+        return await self._run_server_agent(prompt, timeout=600)
 
     # ---------------- 기본 파일/웹 도구 ----------------
 
@@ -253,19 +322,13 @@ class Tools:
         - path: 검색 시작 경로 (예: "/mnt/external", "/home/hoony/models")
         - pattern: 파일명 패턴 (예: "*mimo*", "*.gguf")
         """
-        return await self._call(
-            "bash", {
-                "command": f"find {path} -maxdepth {max_depth} -iname {pattern} 2>/dev/null | head -40",
-            }, timeout=90
-        )
+        return await self._call("find_files", {
+            "path": path, "pattern": pattern, "max_depth": max_depth, "max_matches": 40,
+        }, timeout=90)
 
     async def disk_usage(self, path: str = "/mnt/external") -> str:
         """디스크/폴더 용량 확인 (df 및 폴더별 크기)."""
-        return await self._call(
-            "bash", {
-                "command": f"df -h {path} 2>/dev/null | tail -1; du -sh {path}/* 2>/dev/null | sort -rh | head -15",
-            }, timeout=120
-        )
+        return await self._call("disk_usage", {"path": path}, timeout=30)
 
     async def pc_say(self, text: str) -> str:
         """내 PC 스피커로 텍스트를 소리내어 말하게 한다 (한국어 음성).

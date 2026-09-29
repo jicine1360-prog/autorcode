@@ -1,5 +1,6 @@
 """도구 레지스트리 + 실행기. 모든 출력은 상한으로 잘리고, 오류는 예외 대신 문자열로 환류."""
 import logging
+import fnmatch
 import os
 import re
 import shutil
@@ -156,6 +157,151 @@ def _list_dir(args: Args, root: str, max_output: int, timeout: int) -> str:
 
 
 _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".cache"}
+
+
+def _find_files(args: Args, root: str, max_output: int, timeout: int) -> str:
+    """Workspace 안에서 이름 패턴을 찾는다. shell 문자열을 실행하지 않는다."""
+    base = safety.confine(str(args.get("path") or "."), root)
+    pattern = str(args.get("pattern") or "").strip()
+    if not pattern or len(pattern) > 200:
+        return "[오류] pattern은 1~200자로 지정하세요"
+    try:
+        max_depth = max(1, min(int(args.get("max_depth") or 4), 16))
+        max_matches = max(1, min(int(args.get("max_matches") or 40), 200))
+    except (TypeError, ValueError):
+        return "[오류] max_depth/max_matches는 정수여야 합니다"
+    if not os.path.exists(base):
+        return f"[오류] 경로 없음: {args.get('path')}"
+    matches = []
+    pat = pattern.casefold()
+    if os.path.isfile(base):
+        return os.path.basename(base) if fnmatch.fnmatchcase(os.path.basename(base).casefold(), pat) else "일치 없음"
+    candidates = os.walk(base, followlinks=False)
+    for dirpath, dirnames, filenames in candidates:
+        rel = os.path.relpath(dirpath, base)
+        depth = 0 if rel == "." else rel.count(os.sep) + 1
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS and not os.path.islink(os.path.join(dirpath, d)))
+        if depth >= max_depth:
+            dirnames[:] = []
+        for name in sorted([*dirnames, *filenames]):
+            if fnmatch.fnmatchcase(name.casefold(), pat):
+                full = os.path.join(dirpath, name)
+                out = os.path.relpath(full, base)
+                if os.path.isdir(full) and not out.endswith(os.sep):
+                    out += os.sep
+                matches.append(out)
+                if len(matches) >= max_matches:
+                    return _cap("\n".join(matches) + f"\n…결과 상한 {max_matches}개", max_output)
+    return _cap("\n".join(matches) if matches else "일치 없음", max_output)
+
+
+def _disk_usage(args: Args, root: str, max_output: int, timeout: int) -> str:
+    """Workspace 경로의 파일시스템 여유 공간과 상위 폴더 크기를 제한적으로 계산."""
+    base = safety.confine(str(args.get("path") or "."), root)
+    if not os.path.exists(base):
+        return f"[오류] 경로 없음: {args.get('path')}"
+    try:
+        usage = shutil.disk_usage(base)
+    except OSError as e:
+        return f"[오류] 디스크 조회 실패: {e}"
+    used = usage.total - usage.free
+    lines = [f"[디스크] {base}: 사용 {used / 2**30:.1f}/{usage.total / 2**30:.1f} GiB "
+             f"({used / usage.total * 100:.1f}%), 여유 {usage.free / 2**30:.1f} GiB"]
+    if not os.path.isdir(base):
+        return _cap("\n".join(lines), max_output)
+
+    sizes: dict[str, int] = {}
+    deadline = time.monotonic() + max(1, min(timeout, 15))
+    budget = 15000
+    visited = 0
+    truncated = False
+    for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS and not os.path.islink(os.path.join(dirpath, d)))
+        rel = os.path.relpath(dirpath, base)
+        for name in filenames:
+            fp = os.path.join(dirpath, name)
+            try:
+                st = os.stat(fp, follow_symlinks=False)
+            except OSError:
+                continue
+            if not os.path.isfile(fp):
+                continue
+            top = name if rel == "." else rel.split(os.sep, 1)[0]
+            sizes[top] = sizes.get(top, 0) + st.st_size
+            visited += 1
+            if visited >= budget or time.monotonic() >= deadline:
+                truncated = True
+                break
+        if truncated:
+            break
+    for name, size in sorted(sizes.items(), key=lambda kv: (-kv[1], kv[0]))[:30]:
+        lines.append(f"  {name:<40} {size / 2**30:8.2f} GiB")
+    if truncated:
+        lines.append(f"  (부분 집계: {visited:,}개 파일/시간 제한; 큰 항목은 실제보다 작게 보일 수 있음)")
+    return _cap("\n".join(lines), max_output)
+
+
+def _service_status(args: Args, root: str, max_output: int, timeout: int) -> str:
+    """현재 사용자 세션의 서비스 상태만 읽는다."""
+    state = str(args.get("state") or "all").lower()
+    if state not in {"all", "active", "failed", "inactive"}:
+        return "[오류] state는 all/active/failed/inactive 중 하나여야 합니다"
+    exe = shutil.which("systemctl")
+    if not exe:
+        return "[오류] systemctl 없음"
+    cmd = [exe, "--user", "list-units", "--type=service", "--all", "--no-legend", "--no-pager"]
+    if state != "all":
+        cmd.append(f"--state={state}")
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=min(timeout, 15))
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"[오류] 서비스 조회 실패: {e}"
+    if result.returncode:
+        return f"[오류] systemctl: {(result.stderr or '').strip()[:300]}"
+    return _cap(result.stdout.strip() or "일치하는 사용자 서비스 없음", max_output)
+
+
+def _process_list(args: Args, root: str, max_output: int, timeout: int) -> str:
+    """프로세스 목록 상위 CPU 소비 항목."""
+    try:
+        limit = max(1, min(int(args.get("limit") or 15), 30))
+    except (TypeError, ValueError):
+        return "[오류] limit은 정수여야 합니다"
+    ps = shutil.which("ps")
+    if not ps:
+        return "[오류] ps 없음"
+    try:
+        result = subprocess.run([ps, "-eo", "pid,ppid,comm,%cpu,%mem", "--sort=-%cpu"],
+                                capture_output=True, text=True, timeout=min(timeout, 10))
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"[오류] 프로세스 조회 실패: {e}"
+    if result.returncode:
+        return f"[오류] ps: {(result.stderr or '').strip()[:300]}"
+    return _cap("\n".join(result.stdout.splitlines()[:limit + 1]), max_output)
+
+
+def _service_logs(args: Args, root: str, max_output: int, timeout: int) -> str:
+    """허용된 사용자 서비스의 최근 로그. secret 패턴은 반환 전 마스킹한다."""
+    service = str(args.get("service") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_@.-]{1,80}\.service", service) or service.startswith("-"):
+        return "[오류] 서비스 이름이 올바르지 않습니다 (.service 이름 필요)"
+    try:
+        lines = max(1, min(int(args.get("lines") or 50), 200))
+    except (TypeError, ValueError):
+        return "[오류] lines는 정수여야 합니다"
+    exe = shutil.which("journalctl")
+    if not exe:
+        return "[오류] journalctl 없음"
+    try:
+        result = subprocess.run([exe, "--user", "-u", service, "-n", str(lines), "--no-pager", "-o", "short-iso"],
+                                capture_output=True, text=True, timeout=min(timeout, 20))
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"[오류] journal 조회 실패: {e}"
+    text = result.stdout or result.stderr or "로그 없음"
+    text = re.sub(r"\b\d{8,10}:[A-Za-z0-9_-]{30,}\b", "[telegram-token-redacted]", text)
+    text = re.sub(r"\bsk-or-v1-[A-Za-z0-9_-]{20,}\b", "[api-key-redacted]", text)
+    text = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{16,}", r"\1[redacted]", text)
+    return _cap(text.strip() or "로그 없음", max_output)
 
 
 def _grep_files(args: Args, root: str, max_output: int, timeout: int) -> str:
@@ -489,10 +635,15 @@ def _live_models(timeout: int) -> str:
 TOOLS: Dict[str, ToolFn] = {
     "bash": _bash,
     "system_info": _system_info,
+    "service_status": _service_status,
+    "process_list": _process_list,
+    "service_logs": _service_logs,
     "read_file": _read_file,
     "write_file": _write_file,
     "edit_file": _edit_file,
     "list_dir": _list_dir,
+    "find_files": _find_files,
+    "disk_usage": _disk_usage,
     "grep_files": _grep_files,
     "excel_summary": _excel_summary,
     "excel_write": _excel_write,
@@ -512,6 +663,11 @@ SCHEMAS = {
     "list_dir": "args: {path?:str} — 디렉터리 목록",
     "grep_files": "args: {pattern:str, path?:str, max_matches?:int} — 정규식 내용 검색",
     "system_info": "args: {section?:'all'|'host'|'cpu'|'mem'|'gpu'|'models'|'disk'} — 지금 실행 중인 기기의 라이브 상태(CPU/RAM/GPU VRAM/상주 모델/디스크). 설치 목록이 아니라 구동 중 값",
+    "service_status": "args: {state?:'all'|'active'|'failed'|'inactive'} — 서버의 사용자 서비스 상태 조회 (읽기 전용)",
+    "process_list": "args: {limit?:int} — 서버에서 현재 실행 중인 프로세스 상위 CPU 목록 (읽기 전용)",
+    "service_logs": "args: {service:str, lines?:int} — 사용자 서비스 최근 로그; 토큰/API 키 패턴은 마스킹",
+    "find_files": "args: {path?:str, pattern:str, max_depth?:int, max_matches?:int} — 작업공간 안 이름 검색 (shell 미사용)",
+    "disk_usage": "args: {path?:str} — 경로의 파일시스템 여유 공간과 제한된 상위 폴더 사용량",
     "excel_summary": "args: {path:str, sheet?:str, max_rows?:int} — .xlsx 열제목/행/숫자합계 요약",
     "excel_write": "args: {path:str, content:str} — Markdown 표를 .xlsx 시트로 저장",
     "pdf_read": "args: {path:str} — PDF를 텍스트로 추출(pdftotext)",

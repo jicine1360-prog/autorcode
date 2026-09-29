@@ -255,8 +255,9 @@ curl -X POST http://127.0.0.1:8788/tool \
   -d '{"tool":"list_dir","args":{"path":"."}}'
 ```
 
-- **승인 게이트**: `bash`/`write_file`/`edit_file` 는 `AGENT_PERMS`(기본 `balanced`)로
-  판정한 뒤, `confirm` 판정은 `harness/approve.py` 의 텔레그램 게이트로 넘어갑니다.
+- **승인 게이트**: 배포된 WebUI 브리지는 `AGENT_PERMS=strict`로 운영합니다.
+  `bash`/`write_file`/`edit_file` 변경은 `harness/approve.py`의 텔레그램 승인을 거칩니다.
+  CLI 기본값은 `balanced`입니다.
   게이트 설정(`~/.autorcode/telegram.json`)이 없으면 **확인 필요 작업은 전부 거부**됩니다
   (fail-closed). 브리지 웹 경로도 동일한 판정을 거칩니다 — `/run` 만 거르지 않습니다.
 - **8787 은 사용하지 않습니다**: 구 시스템 유닛(`autorcode-bridge.service`)은
@@ -274,6 +275,13 @@ curl -X POST http://127.0.0.1:8788/tool \
   **system_info (지금 실행 중인 기기의 CPU·메모리·GPU·상주 모델을 라이브로 조회)**
 - **주의**: 브리지는 localhost 바인딩이 기본. 외부 노출 시 반드시
   인증(authelia 등) 뒤에 두고 토큰을 교체하세요.
+- **PC 게이트(8791)**: `~/.autorcode/pcgate.token` 은 권한 `600`이어야 하며,
+  그 외 권한이면 서비스가 기동을 거부합니다. 인증 비교는 constant-time이고,
+  요청 본문/응답 크기, PC 슬롯·대기열·결과 수와 인증 실패 횟수를 제한하며,
+  원격 IP를 기록하되 URL 토큰은 로그에서 마스킹합니다. 현재 `0.0.0.0` 바인딩은 Windows PC 접속 경로를 확인할 때까지
+  유지 중입니다. 로그에서 클라이언트 경로를 확인한 뒤 Tailnet/허용 IP로 좁히세요.
+  `restart`/`shutdown`/`sleep`은 기본 거부이며, 필요할 때만 유닛에
+  `PCGATE_DANGEROUS_ENABLED=1`을 명시적으로 설정하세요 (`confirm=true`만으로는 승인 아님).
 
 ### Open WebUI DB 직접 수정 시 (실 사고 기록)
 

@@ -28,19 +28,11 @@ class SystemInfoTest(unittest.TestCase):
         self.assertEqual(missing, [], f"구현은 됐지만 설명이 없는 도구: {missing}")
 
     def test_allow_list_only_references_callable_tools(self):
-        # ALLOW_LIST 에는 있는데 브리지에 구현이 없는 이름이 있다. 웹UI 도구가
-        # _call 로 프록시하므로 호출하면 '알 수 없는 도구' 로 실패한다 — 실제로
-        # 깨진 경로다. TODO 로 여기 남겨두면 고치는 시점에 테스트가 알려준다.
+        # 브리지 허용 목록은 구현이 있는 도구만 가리켜야 한다.
         from harness import bridge, mcp
         available = set(tools.TOOLS) | set(mcp.mcp_tool_fns())
-        # 웹UI 측 자체 구현이라 브리지로 오지 않는 이름
-        local_only = {"support_status", "service_intro"}
-        known_gaps = {"find_files", "disk_usage"}  # TODO: 브리지 구현 추가
-        unknown = sorted(bridge.ALLOW_LIST - available - local_only)
-        self.assertEqual(
-            unknown, sorted(known_gaps),
-            f"알 수 없는 허용 도구 변경됨. 브리지 구현 추가 후 known_gaps 에서 빼세요: {unknown}")
-        self.assertTrue(local_only.isdisjoint(available))
+        unknown = sorted(bridge.ALLOW_LIST - available)
+        self.assertEqual(unknown, [], f"허용됐지만 구현이 없는 도구: {unknown}")
 
     def test_default_reports_live_sections(self):
         out = self._info()
