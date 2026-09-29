@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -352,8 +353,142 @@ def _image_ocr(args, root, max_output, timeout):
     return _cap(f"[OCR(사진→텍스트)] {path}\n{'-'*40}\n{text}", max_output) if len(text) > 0 else text
 
 
+def _system_info(args, root, max_output, timeout):
+    """지금 실제로 실행 중인 기기의 라이브 상태.
+
+    설치 목록(dpkg/pip -l) 이 아니라 구동 중 값을 읽는다: 커널/호스트, CPU 모델과
+    코어 수, RAM 사용량, 디스크 사용률, GPU 의 실시간 VRAM 사용량, 그리고 지금
+    GPU 에 올라와 있는 모델. '무엇이 설치돼 있나'와 '무엇이 돌고 있나'는 다른
+    질문이고, 후자가 필요해서 이 도구가 있다.
+    """
+    want = str(args.get("section") or "all").lower()
+    secs = want if want in _SYS_SECTIONS else "all"
+    out: list[str] = []
+    tmo = min(timeout, 15)
+
+    if secs in ("all", "host"):
+        try:
+            un = os.uname()
+            out.append(f"[호스트] {socket.gethostname()}  {un.sysname} {un.release}  {un.machine}")
+            boot = _boot_elapsed()
+            if boot:
+                out.append(f"        가동 {boot}")
+        except Exception as e:
+            out.append(f"[호스트] 조회 실패: {e}")
+
+    if secs in ("all", "cpu"):
+        model, cores = "(알 수 없음)", 0
+        try:
+            with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if line.startswith("model name") and model == "(알 수 없음)":
+                        model = line.split(":", 1)[1].strip()
+                    if line.startswith("processor"):
+                        cores += 1
+        except OSError as e:
+            model = f"조회 실패: {e}"
+        try:
+            l1, l5, l15 = os.getloadavg()
+            load = f"  부하(1/5/15분) {l1:.2f} / {l5:.2f} / {l15:.2f}"
+        except OSError:
+            load = ""
+        out.append(f"[CPU]   {model}  ×{cores} 코어{load}")
+
+    if secs in ("all", "mem"):
+        try:
+            info: dict[str, int] = {}
+            with open("/proc/meminfo", encoding="utf-8") as f:
+                for line in f:
+                    k, _, v = line.partition(":")
+                    if k in ("MemTotal", "MemAvailable", "SwapTotal"):
+                        info[k] = int(v.split()[0])
+            tot = info.get("MemTotal", 0) // 1024
+            avail = info.get("MemAvailable", 0) // 1024
+            used = tot - avail
+            sw = info.get("SwapTotal", 0) // 1024
+            pct = (used / tot * 100) if tot else 0
+            out.append(f"[메모리] {used:,} / {tot:,} MiB 사용 ({pct:.0f}%), 스왑 {sw:,} MiB")
+        except (OSError, ValueError, IndexError) as e:
+            out.append(f"[메모리] 조회 실패: {e}")
+
+    if secs in ("all", "gpu"):
+        rows = _nvidia_live(tmo)
+        out.append(f"[GPU]   {rows}" if rows else "[GPU]   NVIDIA GPU 없음")
+
+    if secs in ("all", "models"):
+        out.append(f"[모델]  {_live_models(tmo)}")
+
+    if secs in ("all", "disk"):
+        for target in ("/", os.path.expanduser("~")):
+            try:
+                u = shutil.disk_usage(target)
+                used = u.total - u.free
+                out.append(f"[디스크] {target:<12} {used / u.total * 100:5.1f}% 사용, "
+                           f"여유 {u.free / 2**30:,.0f} GiB / {u.total / 2**30:,.0f} GiB")
+            except OSError as e:
+                out.append(f"[디스크] {target}: 조회 실패 ({e})")
+
+    return _cap("\n".join(out) if out else "[요청한 섹션이 없음]", max_output)
+
+
+_SYS_SECTIONS = ("all", "host", "cpu", "mem", "gpu", "models", "disk")
+
+
+def _boot_elapsed() -> str:
+    try:
+        with open("/proc/uptime", encoding="ascii") as f:
+            up = float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return ""
+    d, rem = divmod(int(up), 86400)
+    h, rem = divmod(rem, 3600)
+    return f"{d}일 {h}시간 {rem // 60}분"
+
+
+def _nvidia_live(timeout: int) -> str:
+    """GPU 별 실시간 VRAM/利用率. 없는 드라이버는 조용히 넘어간다."""
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        return ""
+    try:
+        r = subprocess.run(
+            [exe, "--query-gpu=index,name,memory.total,memory.used,utilization.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if r.returncode != 0 or not r.stdout.strip():
+        return ""
+    parts = []
+    for line in r.stdout.strip().splitlines():
+        f = [x.strip() for x in line.split(",")]
+        if len(f) != 5:
+            continue
+        parts.append(f"  GPU{f[0]}: {f[1]}  VRAM {f[3]}/{f[2]} MiB  부하 {f[4]}%")
+    return "\n".join(parts)
+
+
+def _live_models(timeout: int) -> str:
+    """지금 GPU 에 상주해 있는 LLM. '설치된 모델'과 '실행 중인 모델'은 다르다."""
+    exe = shutil.which("ollama")
+    if not exe:
+        return "ollama 없음 (설치/실행 중인 모델 조회 불가)"
+    try:
+        r = subprocess.run([exe, "ps"], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return "ollama ps 조회 실패"
+    body = (r.stdout or "").strip()
+    if r.returncode != 0 or not body:
+        return "ollama 응답 없음"
+    lines = [ln for ln in body.splitlines() if ln.strip()]
+    if len(lines) <= 1:
+        return "지금 상주 중인 모델 없음 (모든 모델 언로드됨)"
+    return "\n".join("  " + ln for ln in lines)
+
+
 TOOLS: Dict[str, ToolFn] = {
     "bash": _bash,
+    "system_info": _system_info,
     "read_file": _read_file,
     "write_file": _write_file,
     "edit_file": _edit_file,
