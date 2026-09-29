@@ -270,9 +270,45 @@ curl -X POST http://127.0.0.1:8788/tool \
   작업에 필요한 하위 디렉터리 하나를 workspace 로 지정할 것.
 
 - **브리지 도구**: 파일 조회·수정 / 웹검색·웹페이지 / 유튜브 자막 / **엑셀(.xlsx) 생성·요약** /
-  **PDF 텍스트 추출(pdftotext)** / **이미지 OCR(tesseract)** / 영구 기억(remember/recall/forget)
+  **PDF 텍스트 추출(pdftotext)** / **이미지 OCR(tesseract)** / 영구 기억(remember/recall/forget) /
+  **system_info (지금 실행 중인 기기의 CPU·메모리·GPU·상주 모델을 라이브로 조회)**
 - **주의**: 브리지는 localhost 바인딩이 기본. 외부 노출 시 반드시
   인증(authelia 등) 뒤에 두고 토큰을 교체하세요.
+
+### Open WebUI DB 직접 수정 시 (실 사고 기록)
+
+브리지 토큰 회전 때문에 `/app/backend/data/webui.db` 의 `tool.valves` 를 직접 UPDATE 했다.
+`updated_at` 을 문자열로 써 넣었고, 이 열은 epoch **정수**라 다음 채팅에서 도구 등록이
+통째로 실패했다:
+
+```
+ValidationError: 1 validation error for ToolModel
+updated_at — Input should be a valid integer [type=int_parsing]
+```
+
+토큰 변경은 성공했는데 위 에러를 보고도 넘어갔다. **쓰기가 성공했다는 사실과 읽기가
+성공한다는 사실은 다르다.**
+
+앞으로 DB 를 만질 때는:
+
+1. **컬럼 타입 먼저 확인** — `open_webui/models/tools.py` 의 `ToolModel` 정의를 읽을 것.
+   `updated_at`/`created_at` 은 둘 다 `int` (epoch).
+2. **변경 전 백업** — `cp webui.db webui.db.bak-$(date +%Y%m%d-%H%M%S)`
+3. **변경 후 ORM 경로로 재검증** — 원시 `sqlite3` 으로는 확인이 안 된다. `specs` 는
+   `Column(JSONField)` 라 ORM 이 파싱하고, 원시 조회로는 타입 str 로 보인다(정상).
+   아래처럼 실제 로드 경로를 타야 한다:
+
+   ```bash
+   docker exec open-webui sh -c 'cd /app/backend && python3 -c "
+   import sys,asyncio; sys.path.insert(0,\"/app/backend\")
+   from open_webui.models.tools import Tools, ToolModel
+   from open_webui.internal.db import AsyncSessionLocal
+   async def m():
+       async with AsyncSessionLocal() as db:
+           print(ToolModel.model_validate(await Tools.get_tool_by_id(\"autorcode\", db)).name)
+   asyncio.run(m())"'
+   ```
+
 - 지원 문의는 위 "문의/협업" 항목(이메일)을 사용합니다.
 
 ## License
