@@ -5,10 +5,10 @@ Open WebUI(작업공간 → 도구 → 새 도구)에 이 파일을 붙여넣고
 채팅에서 모델에 도구를 활성화하면 autorcode(호스트 브리지)를 자연어로 부를 수 있다.
 
 준비:
-  1. 호스트에서 브리지 기동 (systemd: autorcode-bridge.service, 127.0.0.1:8787)
+  1. 호스트에서 브리지 기동 (systemd --user: autorcode-bridge-v2.service, 127.0.0.1:8788)
   2. Open WebUI → 작업공간 → 도구 → 이 코드 붙여넣기 → 저장
-  3. 도구 설정(Valves)에서 BRIDGE_TOKEN을 호스트의 ~/.autorcode/bridge.token 값으로 설정
-     (또는 컨테이너 env AUTORCODE_BRIDGE_TOKEN 사용)
+  3. 도구 설정(Valves)에서 BRIDGE_TOKEN을 호스트의 ~/.autorcode/bridge.env 안
+     AUTORCODE_BRIDGE_TOKEN 값으로 설정 (또는 컨테이너 env AUTORCODE_BRIDGE_TOKEN 사용)
   4. 새 채팅 → 사용 모델에 이 도구들 활성화
 
 도구 목록:
@@ -36,12 +36,12 @@ from pydantic import BaseModel, Field
 class Tools:
     class Valves(BaseModel):
         BRIDGE_URL: str = Field(
-            default="http://127.0.0.1:8787",
+            default="http://127.0.0.1:8788",
             description="autorcode 브리지 주소 (localhost)",
         )
         BRIDGE_TOKEN: str = Field(
             default="",
-            description="Bearer 토큰 — 호스트의 ~/.autorcode/bridge.token 값"
+            description="Bearer 토큰 — 호스트의 ~/.autorcode/bridge.env 안 AUTORCODE_BRIDGE_TOKEN 값"
                         " (환경변수 AUTORCODE_BRIDGE_TOKEN도 대체 사용)",
         )
         WORKSPACE: str = Field(

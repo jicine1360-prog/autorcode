@@ -210,7 +210,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser(description="autorcode HTTP 브리지")
-    ap.add_argument("--port", type=int, default=int(os.getenv("AUTORCODE_BRIDGE_PORT", "8787")))
+    ap.add_argument("--port", type=int, default=int(os.getenv("AUTORCODE_BRIDGE_PORT", "8788")))
     ap.add_argument("--host", default=os.getenv("AUTORCODE_BRIDGE_HOST", "127.0.0.1"))
     ap.add_argument("--workspace", default=os.getenv("AGENT_WORKSPACE", os.path.expanduser("~")))
     ap.add_argument("--perms", default=os.getenv("AGENT_PERMS", "balanced"),

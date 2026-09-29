@@ -210,14 +210,25 @@ from the browser. The host bridge (`harness/bridge.py`) runs tools on 127.0.0.1 
 a Bearer token; the existing sandbox, RLIMIT and SSRF guards still apply.
 
 ```bash
-# Run the bridge as a service. Do not hardcode the token in the unit file — it ends
-# up in git history (it has already leaked once). Use systemd's EnvironmentFile.
-umask 077 && mkdir -p ~/.config/autorcode
+# Run the bridge as a user systemd service. Do not hardcode the token in the unit
+# file — it ends up in git history (it has already leaked once). Use EnvironmentFile.
+umask 077 && mkdir -p ~/.autorcode
 printf 'AUTORCODE_BRIDGE_TOKEN=%s\n' "$(python3 -c 'import secrets;print(secrets.token_hex(32))')" \
-  > ~/.config/autorcode/bridge.env
+  > ~/.autorcode/bridge.env
 
-sudo systemctl enable --now autorcode-bridge   # reads EnvironmentFile= above
+# ~/.config/systemd/user/autorcode-bridge-v2.service reads
+# EnvironmentFile=%h/.autorcode/bridge.env and binds 127.0.0.1:8788
+systemctl --user enable --now autorcode-bridge-v2
 ```
+
+- **Approval gate**: `bash`/`write_file`/`edit_file` are judged by `AGENT_PERMS`
+  (default `balanced`); anything needing confirmation is handed to the Telegram
+  gate in `harness/approve.py`. If no gate is configured
+  (`~/.autorcode/telegram.json` missing), **every action requiring confirmation is
+  refused** (fail-closed). The web path applies the same check — it is not enough
+  to gate `/run`.
+- **Port 8787 is retired**: the old system unit (`autorcode-bridge.service`) leaked
+  its token into git history and was removed. The current port is 8788.
 
 - **Token loading**: `harness/bridge.py` reads the **environment variable only**. The
   `~/autorcode/bridge.token` file loader this README used to mention was never

@@ -240,19 +240,27 @@ autorcode 도구를 호출할 수 있습니다. 호스트 브리지(`harness/bri
 그대로 적용됩니다.
 
 ```bash
-# 브리지를 systemd로 운영. 토큰은 유닛 파일에 두지 말고 EnvironmentFile 로 넘긴다.
-# (앞으로 여기 하드코딩하면 git 히스토리에 남는다 — 실제로 한 번 유출됐다.)
-umask 077 && mkdir -p ~/.config/autorcode
+# 브리지를 systemd(사용자 단위)로 운영. 토큰은 유닛 파일에 두지 말고 EnvironmentFile 로 넘긴다.
+# (여기에 하드코딩하면 git 히스토리에 남는다 — 실제로 한 번 유출됐다.)
+umask 077 && mkdir -p ~/.autorcode
 printf 'AUTORCODE_BRIDGE_TOKEN=%s\n' "$(python3 -c 'import secrets;print(secrets.token_hex(32))')" \
-  > ~/.config/autorcode/bridge.env
+  > ~/.autorcode/bridge.env
 
-# systemd/autorcode-bridge.service 는 EnvironmentFile=~/.config/autorcode/bridge.env 를 읽는다
-sudo systemctl enable --now autorcode-bridge
+# ~/.config/systemd/user/autorcode-bridge-v2.service 는
+# EnvironmentFile=%h/.autorcode/bridge.env 를 읽고 127.0.0.1:8788 에 바인딩한다
+systemctl --user enable --now autorcode-bridge-v2
 
-curl -X POST http://127.0.0.1:8787/tool \
-  -H "Authorization: Bearer $(sed -n 's/^AUTORCODE_BRIDGE_TOKEN=//p' ~/.config/autorcode/bridge.env)" \
+curl -X POST http://127.0.0.1:8788/tool \
+  -H "Authorization: Bearer $(sed -n 's/^AUTORCODE_BRIDGE_TOKEN=//p' ~/.autorcode/bridge.env)" \
   -d '{"tool":"list_dir","args":{"path":"."}}'
 ```
+
+- **승인 게이트**: `bash`/`write_file`/`edit_file` 는 `AGENT_PERMS`(기본 `balanced`)로
+  판정한 뒤, `confirm` 판정은 `harness/approve.py` 의 텔레그램 게이트로 넘어갑니다.
+  게이트 설정(`~/.autorcode/telegram.json`)이 없으면 **확인 필요 작업은 전부 거부**됩니다
+  (fail-closed). 브리지 웹 경로도 동일한 판정을 거칩니다 — `/run` 만 거르지 않습니다.
+- **8787 은 사용하지 않습니다**: 구 시스템 유닛(`autorcode-bridge.service`)은
+  토큰이 git 히스토리에 남아 폐기했고, 현재 포트는 8788 입니다.
 
 - **토큰 로딩**: `harness/bridge.py` 는 **환경변수만** 읽는다. README 에 적혀 있던
   `~/autorcode/bridge.token` 파일 로더는 구현돼 있지 않다(문서/코드 불일치).
