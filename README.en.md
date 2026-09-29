@@ -53,6 +53,8 @@ ollama   : http://127.0.0.1:11434 OK — models: 6, loaded ['qwen3.8:latest']
 - **Check/upgrade ollama**: `ollama --version` — to upgrade, just reinstall:
   `curl -fsSL https://ollama.com/install.sh | sh && sudo systemctl restart ollama`
 - **If ollama is not running**: `sudo systemctl enable --now ollama`
+  (to run without ollama, `export OPENROUTER_API_KEY=sk-or-...` — `run` only. With neither
+   set, `run` exits immediately with instructions instead of retrying a dead address)
 - The `AGENT_BASE_URL/OLLAMA_HOST not set` warning can be ignored (informational)
 - First run:
   ```bash
@@ -109,6 +111,7 @@ autorcode run deepseek/deepseek-chat-v3                                        #
 autorcode chat deepseek/deepseek-chat-v3                                       # no tools
 ```
 - Even with ollama stopped, `OPENROUTER_API_KEY` alone lets a bare `run` auto-switch without any local model.
+- With neither available, `run` exits immediately with setup instructions instead of retrying a dead address three times.
 - The default cloud model can be changed with `OPENROUTER_MODEL` (default `deepseek/deepseek-chat-v3`).
 - Any OpenAI-compatible server (vLLM etc.) can be used via `AGENT_BASE_URL`/`AGENT_API_KEY`.
 

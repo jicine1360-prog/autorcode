@@ -73,6 +73,44 @@ class StreamingTests(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(LLMError):
                 OpenAICompatibleLLM._read_stream(io.BytesIO(data), None)
 
+    def test_finish_reason_ends_stream_without_done_marker(self):
+        """finish_reason이 오면 [DONE] 없이도 끝나야 한다.
+
+        이전에는 finished=True만 찍고 루프를 계속해, 서버가 연결을 열어둔 채
+        (HTTP keep-alive) 아무것도 안 보내면 readline()에서 영영 막혔다.
+        """
+        payload = (frame({"choices": [{"delta": {"content": '{"done":true,'}}]})
+                   + frame({"choices": [{"delta": {"content": '"answer":"ok"}'},
+                                         "finish_reason": "stop"}]}))
+        result = []
+
+        def read():
+            result.append(OpenAICompatibleLLM._read_stream(io.BytesIO(payload), None))
+
+        worker = threading.Thread(target=read, daemon=True)
+        worker.start()
+        worker.join(3)
+        self.assertFalse(worker.is_alive(),
+                         "finish_reason 이후에도 스트림 루프가 종료되지 않음")
+        self.assertEqual(json.loads(result[0])["answer"], "ok")
+
+    def test_keep_alive_server_does_not_hang(self):
+        """[DONE]도 finish_reason도 없이 연결만 열어두는 서버는 수신 상한에 걸려야 한다."""
+        class KeepAliveSocket(io.BytesIO):
+            def __init__(self):
+                super().__init__(b"")
+                self.reads = 0
+
+            def readline(self, limit=-1):
+                self.reads += 1
+                return b": keep-alive\n\n"
+
+        socket = KeepAliveSocket()
+        with self.assertRaises(LLMError):
+            OpenAICompatibleLLM._read_stream(socket, None)
+        # 4MB 수신 상한(llm.py)으로 끊겨야 한다. 상한이 없으면 영영 못 끝난다.
+        self.assertLessEqual(socket.reads * 13, 4_000_001)
+
     def test_non_stream_server_works_and_retry_is_visible(self):
         class Response(io.BytesIO):
             headers = {"Content-Type": "application/json"}

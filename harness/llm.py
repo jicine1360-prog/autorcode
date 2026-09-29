@@ -141,6 +141,7 @@ class OpenAICompatibleLLM:
                 raise LengthError("응답 길이 제한 도달")
             if reason is not None:
                 finished = True
+                break
         text = "".join(parts)
         if not finished:
             raise LLMError("응답 스트림이 완료 신호 없이 끊겼습니다")

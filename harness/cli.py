@@ -36,10 +36,16 @@ def _input(prompt: str) -> str:
     input()은 sys.stdin의 로케일 인코딩(보통 utf-8)으로 읽다가 한글 euc-kr 계열
     바이트에서 UnicodeDecodeError로 죽는 경우가 있어 raw 버퍼로 우회한다.
     utf-8 → cp949 순으로 시도하고, 그래도 실패하면 replace 폴백 (예외 없음).
+
+    Ctrl+D나 닫힌 stdin은 빈 바이트열로 읽히며 예외가 없다. 이를 그대로 반환하면
+    호출부의 "빈 입력 → 계속" 경로와 합쳐져 프롬프트 루프가 CPU를 태운다.
+    입력이 진짜로 끝났음을 EOFError로 알린다.
     """
     sys.stdout.write(prompt)
     sys.stdout.flush()
     raw = sys.stdin.buffer.readline()
+    if not raw:
+        raise EOFError("stdin 종료")
     for enc in ("utf-8", "cp949"):
         try:
             return raw.decode(enc).strip()
@@ -166,7 +172,8 @@ def cmd_list(_args):
         models = _get("/api/tags").get("models", [])
     except Exception as e:
         print(f"ollama 서버에 연결할 수 없습니다 ({_host()}): {e}")
-        print("  시작: ollama serve")
+        print("  시작: ollama serve  (또는 sudo systemctl enable --now ollama)")
+        print("  참고: autorcode run은 OPENROUTER_API_KEY가 있으면 ollama 없이도 동작합니다")
         return 1
     loaded = _loaded()
     print(f"{'NAME':<28} {'SIZE':>7}  {'STATUS'}")
@@ -300,6 +307,18 @@ def cmd_run(args):
         names = _names()
     model, prompt = args.model, list(args.prompt or [])
     cloud_key = os.getenv("OPENROUTER_API_KEY")
+    custom_base = os.getenv("AGENT_BASE_URL")
+    if not names and not cloud_key and not custom_base:
+        # 조용히 죽은 127.0.0.1:11434로 3회 재시도한 뒤 "Connection refused"만
+        # 남기는 대신, 해결 방법을 안내하고 즉시 끝낸다.
+        print("[오류] ollama({})에 연결할 수 없고 OPENROUTER_API_KEY도 없어 "
+              "사용할 LLM 백엔드가 없습니다.\n"
+              "  1) 로컬 모델: sudo systemctl enable --now ollama\n"
+              "  2) 클라우드  : export OPENROUTER_API_KEY=sk-or-... "
+              "→ autorcode run만 사용 가능\n"
+              "  3) 임의 서버: export AGENT_BASE_URL=https://... AGENT_API_KEY=...".format(_host()),
+              file=sys.stderr)
+        return 1
     if not names:
         if cloud_key:
             if "/" in model:
@@ -309,7 +328,7 @@ def cmd_run(args):
                 print(f"[연결] ollama 응답 없음 → OpenRouter 사용 ({model})", file=sys.stderr)
             else:
                 print(f"[오류] ollama가 응답하지 않아 로컬 모델 {model!r}을 쓸 수 없습니다. "
-                      f"클라우드로 실행하려면 'deepseek/deepseek-chat-v3' 같은 '/' 모델을 지정하세요.",
+                      "클라우드로 실행하려면 'deepseek/deepseek-chat-v3' 같은 '/' 모델을 지정하세요.",
                       file=sys.stderr)
                 return 1
     elif model and "/" not in model:
