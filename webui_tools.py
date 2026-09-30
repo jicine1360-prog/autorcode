@@ -249,7 +249,7 @@ class Tools:
     # ---------------- 내 PC 관리 (Windows 에이전트) ----------------
 
     async def _pc(self, cmd: str, text: str = "", confirm: bool = False,
-                  timeout: int = 45, pc: str = "pc") -> str:
+                  timeout: int = 45, pc: str = "pc", submit_timeout: int = 10) -> str:
         pc = (pc or "pc").strip().lower()[:64] or "pc"
         body = json.dumps({
             "pc": pc, "cmd": cmd, "text": text,
@@ -260,7 +260,10 @@ class Tools:
             headers={"Content-Type": "application/json"}, method="POST",
         )
         try:
-            resp = await asyncio.to_thread(self._pc_post, req, 10)
+            # 위험 명령(restart/shutdown/sleep)은 서버가 텔레그램 사람 승인을
+            # 기다리므로 제출 자체가 최대 180초 걸린다 — 제출 타임아웃을
+            # 승인 대기보다 크게 잡는다.
+            resp = await asyncio.to_thread(self._pc_post, req, submit_timeout)
             if not resp.get("ok"):
                 return f"[오류] {resp.get('error', '명령 제출 실패')}"
             cmd_id = resp["cmd_id"]
@@ -355,9 +358,14 @@ class Tools:
         - action: "lock"=화면잠금, "sleep"=절전, "restart"=재시작, "shutdown"=종료
         - confirm: restart/shutdown/sleep은 반드시 true로
         - pc: 대상 PC 이름 (생략 시 'pc')
+
+        restart/shutdown/sleep 은 서버에서 텔레그램 사람 승인(180초)을 요구한다 —
+        호출하면 휴대폰으로 승인 요청이 가고, 승인 탭 후에 실행된다.
         """
         Tools._PC_TOKEN_REF[0] = self.valves.PCGATE_TOKEN
         Tools._PC_URL_REF[0] = self.valves.PCGATE_URL
         if action in ("restart", "shutdown", "sleep") and not confirm:
             return f"[확인필요] {action} 은(는) 사용자 확인 후 confirm=true로 호출하세요."
-        return await self._pc(action, confirm=True, timeout=20, pc=pc)
+        dangerous = action in ("restart", "shutdown", "sleep")
+        return await self._pc(action, confirm=True, timeout=30,
+                              pc=pc, submit_timeout=210 if dangerous else 10)

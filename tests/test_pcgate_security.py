@@ -18,14 +18,29 @@ class PcGateSecurityTest(unittest.TestCase):
             self.assertFalse(pcgate._token_matches("wrong-value"))
             self.assertFalse(pcgate._token_matches(None))
 
-    def test_destructive_actions_require_server_side_opt_in(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("PCGATE_DANGEROUS_ENABLED", None)
-            self.assertFalse(pcgate._dangerous_enabled())
-        with patch.dict(os.environ, {"PCGATE_DANGEROUS_ENABLED": "true"}):
-            self.assertTrue(pcgate._dangerous_enabled())
-        with patch.dict(os.environ, {"PCGATE_DANGEROUS_ENABLED": "1"}):
-            self.assertTrue(pcgate._dangerous_enabled())
+    def test_dangerous_commands_require_human_telegram_approval(self):
+        # confirm=true 는 채팅 모델이 스스로 세팅할 수 있어 사람의 확인이 아니다.
+        # 위험 명령은 서버 쪽에서 텔레그램 승인을 강제한다 — 토큰을 아는 직접
+        # 호출자도 게이트를 통과할 수 없어야 한다.
+        class Yes:
+            def __call__(self, q): return True
+
+        class No:
+            def __call__(self, q): return False
+
+        with patch.object(pcgate, "_APPROVER", Yes()):
+            self.assertIsNone(pcgate._dangerous_gate("shutdown", "pc", "", "203.0.113.9"))
+        with patch.object(pcgate, "_APPROVER", No()):
+            reason = pcgate._dangerous_gate("shutdown", "pc", "", "203.0.113.9")
+            self.assertIn("사람 승인 없음", reason)
+
+    def test_dangerous_gate_fails_closed_without_telegram_config(self):
+        # 게이트를 못 만들면(텔레그램 설정 없음) 열리는 게 아니라 거부다.
+        with patch.object(pcgate, "_APPROVER", None), \
+             patch("harness.approve.build_from_config", return_value=None):
+            reason = pcgate._dangerous_gate("shutdown", "pc", "", "203.0.113.9")
+        self.assertIn("승인 게이트", reason)
+        self.assertIn("거부", reason)
 
     def test_bearer_header_preferred_over_query_token(self):
         class Request:

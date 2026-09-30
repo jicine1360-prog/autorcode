@@ -45,9 +45,52 @@ def _token_matches(candidate: object) -> bool:
     return bool(TOKEN) and isinstance(candidate, str) and hmac.compare_digest(candidate, TOKEN)
 
 
-def _dangerous_enabled() -> bool:
-    """Destructive PC actions require an explicit server-side opt-in."""
-    return os.environ.get("PCGATE_DANGEROUS_ENABLED", "").strip().lower() in {"1", "true", "yes"}
+_APPROVER = None          # 늦게 만든 텔레그램 승인 게이트 (None/False/ApprovalGate)
+_APPROVER_LOCK = threading.Lock()
+_APPROVAL_LOCK = threading.Lock()   # 승인 대기 직렬화 — getUpdates 콜백 쟁탈 방지
+
+
+def _approver():
+    """텔레그램 승인 게이트를 처음 필요할 때 만든다. 실패도 fail-closed로 기억."""
+    global _APPROVER
+    with _APPROVER_LOCK:
+        if _APPROVER is None:
+            try:
+                try:
+                    from . import approve            # 패키지로 임포트된 경우
+                except ImportError:
+                    # 스크립트로 직접 실행한 경우(유닛 ExecStart). approve 자체가
+                    # 상대 임포트(from .telegram)를 쓰므로 패키지 경로로 들여온다.
+                    import sys
+                    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                    from harness import approve
+                _APPROVER = approve.build_from_config() or False
+            except Exception as e:
+                log.warning("승인 게이트 구성 실패: %s", e)
+                _APPROVER = False
+        return _APPROVER or None
+
+
+def _dangerous_gate(cmd: str, pc: str, text: str, client_ip: str):
+    """위험 명령의 사람 승인 게이트. None=허가, str=거부 사유.
+
+    confirm=true 는 채팅 모델이 스스로 세팅할 수 있어 사람의 확인이 아니다.
+    토큰을 아는 직접 호출자도 통과할 수 없도록 서버 쪽에서 텔레그램 승인을
+    요구한다. 승인 대기는 직렬화한다 — 여러 요청이 getUpdates 콜백을 동시에
+    훔쳐 보는 사고를 막기 위해서다. 게이트를 못 만들면 거부(fail-closed).
+    """
+    gate = _approver()
+    if gate is None:
+        return "위험 명령은 사람 승인이 필요하지만 승인 게이트(텔레그램 설정)가 없다 — 거부"
+    question = (f"[PC 제어 승인 요청] 대상 PC '{pc}'\n명령: {cmd}\n"
+                + (f"메시지: {text[:200]}\n" if text else "")
+                + "실행할까요?")
+    with _APPROVAL_LOCK:
+        if gate(question):
+            log.info("위험 명령 승인됨 client=%s pc=%s cmd=%s", client_ip, pc, cmd)
+            return None
+        log.warning("위험 명령 거부·시간초과 client=%s pc=%s cmd=%s", client_ip, pc, cmd)
+        return "사람 승인 없음 (거부 또는 180초 초과) — 실행하지 않음"
 
 
 def _request_token(handler):
@@ -170,10 +213,10 @@ class Handler(BaseHTTPRequestHandler):
             text = str(body.get("text") or "")[:4096]
             if cmd not in ALLOWED:
                 return self._json(400, {"ok": False, "error": f"허용 안 된 명령: {cmd!r}"})
-            if cmd in DANGEROUS and not _dangerous_enabled():
-                log.warning("dangerous PC command blocked by server policy client=%s cmd=%s",
-                            self.client_address[0], cmd)
-                return self._json(403, {"ok": False, "error": f"{cmd} 는 서버 정책으로 비활성화됨"})
+            if cmd in DANGEROUS:
+                denied = _dangerous_gate(cmd, pc, text, self.client_address[0])
+                if denied:
+                    return self._json(403, {"ok": False, "error": denied})
             if cmd in DANGEROUS and body.get("confirm") is not True:
                 return self._json(400, {"ok": False, "error": f"{cmd} 는 confirm=true 필요"})
             cmd_id = uuid.uuid4().hex[:12]

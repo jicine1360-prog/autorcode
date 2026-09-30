@@ -280,8 +280,10 @@ curl -X POST http://127.0.0.1:8788/tool \
   요청 본문/응답 크기, PC 슬롯·대기열·결과 수와 인증 실패 횟수를 제한하며,
   원격 IP를 기록하되 URL 토큰은 로그에서 마스킹합니다. 현재 `0.0.0.0` 바인딩은 Windows PC 접속 경로를 확인할 때까지
   유지 중입니다. 로그에서 클라이언트 경로를 확인한 뒤 Tailnet/허용 IP로 좁히세요.
-  `restart`/`shutdown`/`sleep`은 기본 거부이며, 필요할 때만 유닛에
-  `PCGATE_DANGEROUS_ENABLED=1`을 명시적으로 설정하세요 (`confirm=true`만으로는 승인 아님).
+  `restart`/`shutdown`/`sleep` 은 **텔레그램 사람 승인(180초)을 반드시 요구**한다 —
+  토큰과 `confirm=true` 를 갖춰도 승인 거부·시간초과 시 실행되지 않고(fail-closed),
+  승인 게이트를 못 만들면 아예 거부된다. `confirm=true` 는 채팅 모델이 스스로
+  세팅할 수 있어 사람의 확인이 아니기 때문이다.
 
 ### Open WebUI DB 직접 수정 시 (실 사고 기록)
 

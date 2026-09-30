@@ -248,8 +248,11 @@ systemctl --user enable --now autorcode-bridge-v2
   constant-time comparison, request/response sizes, PC slots/queues/results and
   failed-auth attempts are bounded, and access logs record client IPs while redacting query tokens. It still
   binds to `0.0.0.0` until the Windows PC's route is confirmed; then restrict it to
-  Tailnet/known IPs. `restart`/`shutdown`/`sleep` are denied by default; explicitly
-  set `PCGATE_DANGEROUS_ENABLED=1` only if needed (`confirm=true` alone is not approval).
+  Tailnet/known IPs. `restart`/`shutdown`/`sleep` always require **human approval
+  via Telegram (180s)** — even with the token and `confirm=true`, a rejected or
+  timed-out approval means the command is not executed (fail-closed), and if the
+  approval gate cannot be built the command is refused outright (`confirm=true`
+  alone is not approval — the chat model can set it by itself).
 
 ## License
 MIT
