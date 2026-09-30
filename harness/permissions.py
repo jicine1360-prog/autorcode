@@ -78,12 +78,17 @@ def check_bash(cmd: str, mode: str):
     if mode == "strict":
         # strict 는 쓰기·상태 변경을 승인으로 막는 모드다. 그런데 읽기 조회까지
         # 매번 텔레그램 승인을 요구하면 원격 관리 에이전트가 상태 조회조차 못
-        # 하고 대기만 한다. balanced 와 동일한 읽기 전용 판정은 무승인으로
-        # 통과시키고, 나머지는 전부 승인으로 보낸다 — 게이트 대상은 '변경'이다.
+        # 하고 대기만 한다. 읽기 성격의 명령(ALLOW_BIN 과 통과한 _READONLY_BIN)
+        # 은 무승인으로 통과시키고, 나머지는 전부 승인으로 보낸다 — 게이트 대상은
+        # '변경'이다.
         for b in firsts:
-            if b in _READONLY_BIN and _READONLY_BIN[b](cmd):
+            if b in _READONLY_BIN:
+                if _READONLY_BIN[b](cmd):
+                    continue
+                return "confirm", f"strict 모드: '{b}' 상태 변경 호출 — 승인 필요"
+            if b in ALLOW_BIN:
                 continue
-            if b in ALLOW_BIN or b in CONFIRM_BIN or b in _READONLY_BIN:
+            if b in CONFIRM_BIN:
                 return "confirm", "strict 모드: 상태 변경·쓰기 명령 승인 필요"
             return ("deny",
                     f"'{b}'는 화이트리스트 밖 — 허용목록(읽기): {', '.join(sorted(list(ALLOW_BIN)[:12]))}… "
