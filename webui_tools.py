@@ -249,9 +249,10 @@ class Tools:
     # ---------------- 내 PC 관리 (Windows 에이전트) ----------------
 
     async def _pc(self, cmd: str, text: str = "", confirm: bool = False,
-                  timeout: int = 45) -> str:
+                  timeout: int = 45, pc: str = "pc") -> str:
+        pc = (pc or "pc").strip().lower()[:64] or "pc"
         body = json.dumps({
-            "pc": "pc", "cmd": cmd, "text": text,
+            "pc": pc, "cmd": cmd, "text": text,
             "confirm": confirm, "token": self.valves.PCGATE_TOKEN,
         }).encode()
         req = urllib.request.Request(
@@ -269,10 +270,11 @@ class Tools:
                 r = await asyncio.to_thread(self._pc_result, cmd_id, 5)
                 if r.get("status") == "done":
                     return r.get("output") or "(빈 응답)"
-            return (f"[무응답] {cmd} 명령이 {timeout}초 내 결과 없음 — "
-                    "PC가 꺼졌거나 에이전트가 멈췄을 수 있다 (재시작/종료 명령은 정상일 수 있음)")
+            return (f"[무응답] '{pc}' PC의 {cmd} 명령이 {timeout}초 내 결과 없음 — "
+                    "그 PC가 꺼졌거나 에이전트가 실행 중이 아닐 수 있다 (재시작/종료 명령은 정상일 수 있음)")
         except Exception as e:
-            return f"[PC 게이트 연결 실패] {type(e).__name__}: {e} (에이전트 실행 중인지 확인: schtasks /run /tn AutorPC)"
+            return (f"[PC 게이트 연결 실패] {type(e).__name__}: {e} "
+                    f"(대상 PC '{pc}'의 에이전트 실행 여부 확인: schtasks /run /tn AutorPC)")
 
     @staticmethod
     def _pc_post(req: urllib.request.Request, timeout: int) -> dict:
@@ -293,29 +295,38 @@ class Tools:
     _PC_TOKEN_REF = [""]
     _PC_URL_REF = ["http://127.0.0.1:8791"]
 
-    async def pc_status(self) -> str:
-        """내 PC(Windows) 상태 조회: OS/CPU 사용률/메모리/가동시간."""
+    async def pc_status(self, pc: str = "pc") -> str:
+        """PC 상태 조회: OS/CPU 사용률/메모리/가동시간.
+        - pc: 대상 PC 이름 (에이전트가 실행 중인 PC의 컴퓨터 이름, 소문자).
+          생략하면 'pc'. 여러 대가 에이전트를 실행 중이면 이름으로 대상을 고른다.
+        """
         Tools._PC_TOKEN_REF[0] = self.valves.PCGATE_TOKEN
         Tools._PC_URL_REF[0] = self.valves.PCGATE_URL
-        return await self._pc("sysinfo")
+        return await self._pc("sysinfo", pc=pc)
 
-    async def pc_disk(self) -> str:
-        """내 PC 디스크 사용량 (드라이브별 사용/전체 GB, 퍼센트)."""
+    async def pc_disk(self, pc: str = "pc") -> str:
+        """PC 디스크 사용량 (드라이브별 사용/전체 GB, 퍼센트).
+        - pc: 대상 PC 이름 (생략 시 'pc')
+        """
         Tools._PC_TOKEN_REF[0] = self.valves.PCGATE_TOKEN
         Tools._PC_URL_REF[0] = self.valves.PCGATE_URL
-        return await self._pc("disk")
+        return await self._pc("disk", pc=pc)
 
-    async def pc_procs(self) -> str:
-        """내 PC에서 가장 무거운 프로세스 12개 (CPU/메모리 순)."""
+    async def pc_procs(self, pc: str = "pc") -> str:
+        """PC에서 가장 무거운 프로세스 12개 (CPU/메모리 순).
+        - pc: 대상 PC 이름 (생략 시 'pc')
+        """
         Tools._PC_TOKEN_REF[0] = self.valves.PCGATE_TOKEN
         Tools._PC_URL_REF[0] = self.valves.PCGATE_URL
-        return await self._pc("procs")
+        return await self._pc("procs", pc=pc)
 
-    async def pc_updates(self) -> str:
-        """내 PC의 보류 중인 Windows 업데이트 목록 확인."""
+    async def pc_updates(self, pc: str = "pc") -> str:
+        """PC의 보류 중인 Windows 업데이트 목록 확인.
+        - pc: 대상 PC 이름 (생략 시 'pc')
+        """
         Tools._PC_TOKEN_REF[0] = self.valves.PCGATE_TOKEN
         Tools._PC_URL_REF[0] = self.valves.PCGATE_URL
-        return await self._pc("updates", timeout=90)
+        return await self._pc("updates", timeout=90, pc=pc)
 
     async def find_files(self, path: str, pattern: str, max_depth: int = 4) -> str:
         """서버/디스크에서 파일·폴더를 이름으로 검색한다.
@@ -330,21 +341,23 @@ class Tools:
         """디스크/폴더 용량 확인 (df 및 폴더별 크기)."""
         return await self._call("disk_usage", {"path": path}, timeout=30)
 
-    async def pc_say(self, text: str) -> str:
-        """내 PC 스피커로 텍스트를 소리내어 말하게 한다 (한국어 음성).
+    async def pc_say(self, text: str, pc: str = "pc") -> str:
+        """PC 스피커로 텍스트를 소리내어 말하게 한다 (한국어 음성).
         - text: 말할 문장
+        - pc: 대상 PC 이름 (생략 시 'pc')
         """
         Tools._PC_TOKEN_REF[0] = self.valves.PCGATE_TOKEN
         Tools._PC_URL_REF[0] = self.valves.PCGATE_URL
-        return await self._pc("speak", text=text, timeout=60)
+        return await self._pc("speak", text=text, timeout=60, pc=pc)
 
-    async def pc_action(self, action: str, confirm: bool = False) -> str:
-        """내 PC 제어 (신중히 사용).
+    async def pc_action(self, action: str, confirm: bool = False, pc: str = "pc") -> str:
+        """PC 제어 (신중히 사용).
         - action: "lock"=화면잠금, "sleep"=절전, "restart"=재시작, "shutdown"=종료
         - confirm: restart/shutdown/sleep은 반드시 true로
+        - pc: 대상 PC 이름 (생략 시 'pc')
         """
         Tools._PC_TOKEN_REF[0] = self.valves.PCGATE_TOKEN
         Tools._PC_URL_REF[0] = self.valves.PCGATE_URL
         if action in ("restart", "shutdown", "sleep") and not confirm:
             return f"[확인필요] {action} 은(는) 사용자 확인 후 confirm=true로 호출하세요."
-        return await self._pc(action, confirm=True, timeout=20)
+        return await self._pc(action, confirm=True, timeout=20, pc=pc)

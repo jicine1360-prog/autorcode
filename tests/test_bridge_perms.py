@@ -73,6 +73,20 @@ class BridgePermissionGateTest(unittest.TestCase):
         self.assertIsNotNone(bridge._gate("write_file", {"path": "a.txt", "content": "x"}))
         self.assertIsNotNone(bridge._gate("edit_file", {"path": "a.txt"}))
 
+    def test_strict_mode_allows_readonly_bash_without_gate(self):
+        # strict 의 게이트 대상은 '변경'이다. 읽기 조회까지 텔레그램 승인을 요구하면
+        # 원격 관리 에이전트가 상태 확인조차 못 하고 대기만 한다.
+        bridge._PERMS_MODE = "strict"
+        for cmd in ("systemctl --user list-units --no-pager",
+                    "journalctl --user -u x.service -n 20 --no-pager",
+                    "df -h"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(bridge._gate("bash", {"command": cmd}))
+
+    def test_strict_mode_still_gates_state_changing_bash(self):
+        bridge._PERMS_MODE = "strict"
+        self.assertIsNotNone(bridge._gate("bash", {"command": "systemctl --user restart x.service"}))
+
     # --- 정상 동작: 통과해야 한다 ---
 
     def test_readonly_bash_passes_without_confirmation(self):
