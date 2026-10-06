@@ -75,6 +75,8 @@ autorcode run phi4               # 대화형 REPL
 autorcode chat phi4              # 도구 없는 단순 채팅
 autorcode run                    # 인자 없음 → 로드된 모델 우선
 ```
+**모델 고정**: `autorcode run <모델>` — 그 실행만 라우터(fast/smart)를 무시하고
+지정 모델 하나로 고정합니다. 기본 fast/smart를 바꾸지 않아도 됩니다.
 
 ### 도구 호출 — 네이티브 function calling (기본)
 모델이 도구를 고를 때 텍스트 JSON이 아니라 표준 `tool_calls` 프로토콜로 응답합니다.

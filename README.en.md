@@ -73,6 +73,8 @@ autorcode run phi4               # interactive REPL
 autorcode chat phi4              # plain chat, no tools
 autorcode run                    # no argument → uses the currently loaded model
 ```
+**Pin a model**: `autorcode run <model>` — that run ignores the fast/smart router
+and uses the given model alone. No need to change the defaults.
 
 ### Tool calls — native function calling (default)
 The model replies with the standard `tool_calls` protocol instead of text JSON.
