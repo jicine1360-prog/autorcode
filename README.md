@@ -76,6 +76,18 @@ autorcode chat phi4              # 도구 없는 단순 채팅
 autorcode run                    # 인자 없음 → 로드된 모델 우선
 ```
 
+### 도구 호출 — 네이티브 function calling (기본)
+모델이 도구를 고를 때 텍스트 JSON이 아니라 표준 `tool_calls` 프로토콜로 응답합니다.
+서버(또는 프록시)가 `tools` 요청을 400/404로 거부하면 자동으로 텍스트 JSON 규식
+(A/B/C)으로 재시도합니다.
+
+- `AGENT_NATIVE_TOOLS=0` — 네이티브를 끄고 텍스트 JSON 규식으로 강제
+- 작업 완료는 표준 함수 `done(answer=...)` 호출로 수신합니다
+- 실행 중 **`Ctrl+C`** — 현재 단계를 버리고 즉시 `[중단]` 반환. 돌고 있던
+  툴 라운드는 메모리에서 정리되므로 다음 요청이 어긋나지 않습니다
+- start 전에 ollama에 설치된 모델을 확인해 없으면 `[오류]`로 알려줍니다
+  (`AGENT_MODEL_FAST/SMART` 오타 방지)
+
 ### 자율 모드 (--auto)
 파괴적 명령(rm -rf, pkill, curl|bash, shutdown 등)만 승인 요청하고 나머지는 자동 승인.
 ```bash
@@ -197,10 +209,12 @@ autorcode run phi4 "파일 목록 봐" 2>progress.log
 단계인지 추측하지 않으며, 서버가 실제 응답을 보내기 전에는 '모델 응답 대기'로 표시합니다.
 
 ## 동작 구조
-`판단(LLM) ↔ JSON 프로토콜 ↔ 하네스(도구 실행/권한/샌드박스)`
+`판단(LLM) ↔ tool_calls 프로토콜(네이티브, 폴백 시 JSON) ↔ 하네스(도구 실행/권한/샌드박스)`
 
 - **라우팅**: 요청 키워드 점수로 fast/smart, `run <model>`은 단일 모델 고정
-- **프로토콜**: A)단일도구 B)병렬도구(actions) C)done — 3단 파서+셀프리페어.
+- **프로토콜**: 기본은 네이티브 `tool_calls`(SCHEMAS에서 JSON 스키마 자동 생성,
+  완료도 `done` 함수로 수신). 서버 미지원이면 A)단일도구 B)병렬도구(actions)
+  C)done 텍스트 JSON으로 자동 폴백—3단 파서+셀프리페어.
   모델이 규식 JSON 없이 평문으로 답하면 그 답을 그대로 인정(캐주얼 채팅 하드중단 방지)
 - **도구**: bash / 파일(read·write·edit·list·grep) + **web_search**(DDG, API키 불필요) /
   **web_fetch**(웹페이지) / **youtube**(yt-dlp 메타+자막 — 영상 "보기")
@@ -212,18 +226,18 @@ autorcode run phi4 "파일 목록 봐" 2>progress.log
 ## 설정 (환경변수)
 ```
 AGENT_BASE_URL/AGENT_API_KEY   openai 전환: https://api.openai.com/v1 + sk-...
-AGENT_MODEL_FAST/SMART         ollama 모델명 (기본 phi4:latest / qwen3.8:27b-hunmin-64k)
+AGENT_MODEL_FAST/SMART         ollama 모델명 (기본 qwen3:30b-a3b / qwen3.8:latest)
 AGENT_PERMS                    yolo | balanced(기본) | strict
 AGENT_MAX_STEPS(15) AGENT_BASH_TIMEOUT(30) AGENT_CONTEXT_TOKENS(40000)
 AGENT_RLIMIT_MEM_MB(4096) AGENT_RLIMIT_NPROC(128) AGENT_MAX_TOKENS(2048)
-AGENT_SHOW_STEPS(1) AGENT_SHOW_DETAILS(0) AGENT_STREAM(1)   # 0/1
+AGENT_SHOW_STEPS(1) AGENT_SHOW_DETAILS(0) AGENT_STREAM(1) AGENT_NATIVE_TOOLS(1)   # 0/1
 ```
 전체 목록: `autorcode help`
 
 ## 개발/테스트
 ```bash
 python3 -m compileall -q harness agent.py
-python3 -m unittest discover -s tests -v     # CI: GitHub Actions (.github/workflows/test.yml)
+python3 -m unittest discover -s tests -v     # 137개 · CI: GitHub Actions (.github/workflows/test.yml)
 ```
 
 ## 문의/협업

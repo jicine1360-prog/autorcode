@@ -74,6 +74,18 @@ autorcode chat phi4              # plain chat, no tools
 autorcode run                    # no argument → uses the currently loaded model
 ```
 
+### Tool calls — native function calling (default)
+The model replies with the standard `tool_calls` protocol instead of text JSON.
+If the server (or a proxy) rejects the `tools` request with 400/404, autorcode
+automatically retries with the text JSON format (A/B/C).
+
+- `AGENT_NATIVE_TOOLS=0` — disable native calling and force the text JSON format
+- Completion is received as a standard `done(answer=...)` function call
+- **`Ctrl+C`** mid-run — aborts the current step and returns `[중단]` immediately;
+  the in-flight tool round is cleaned from memory so the next request stays consistent
+- Before starting, the installed ollama models are checked and a missing
+  `AGENT_MODEL_FAST/SMART` prints an `[오류]` (typo guard)
+
 ### Auto mode (--auto)
 Only destructive commands (rm -rf, pkill, curl|bash, shutdown, etc.) require approval; everything else runs automatically.
 ```bash
@@ -166,10 +178,13 @@ does not guess whether the model is loading or inferring; before the server send
 response it always shows 'waiting for model response'.
 
 ## How it works
-`judgement (LLM) ↔ JSON protocol ↔ harness (tool execution / permissions / sandbox)`
+`judgement (LLM) ↔ tool_calls protocol (native, JSON fallback) ↔ harness (tool execution / permissions / sandbox)`
 
 - **Routing**: request keyword scoring picks fast/smart; `run <model>` pins a single model
-- **Protocol**: A)single tool B)parallel tools (actions) C)done — 3-stage parser + self-repair.
+- **Protocol**: native `tool_calls` by default (JSON schemas auto-generated from SCHEMAS,
+  completion received as a `done` call). If the server does not support tools, it
+  automatically falls back to A)single tool B)parallel tools (actions) C)done — the
+  3-stage parser + self-repair.
   If the model answers in plain text without structured JSON, that answer is accepted as-is
   (prevents hard aborts on casual chat)
 - **Tools**: bash / files (read·write·edit·list·grep) + **web_search** (DDG, no API key) /
@@ -182,18 +197,18 @@ response it always shows 'waiting for model response'.
 ## Configuration (environment variables)
 ```
 AGENT_BASE_URL/AGENT_API_KEY   openai switch: https://api.openai.com/v1 + sk-...
-AGENT_MODEL_FAST/SMART         ollama model names (default phi4:latest / qwen3.8:27b-hunmin-64k)
+AGENT_MODEL_FAST/SMART         ollama model names (default qwen3:30b-a3b / qwen3.8:latest)
 AGENT_PERMS                    yolo | balanced (default) | strict
 AGENT_MAX_STEPS(15) AGENT_BASH_TIMEOUT(30) AGENT_CONTEXT_TOKENS(40000)
 AGENT_RLIMIT_MEM_MB(4096) AGENT_RLIMIT_NPROC(128) AGENT_MAX_TOKENS(2048)
-AGENT_SHOW_STEPS(1) AGENT_SHOW_DETAILS(0) AGENT_STREAM(1)   # 0/1
+AGENT_SHOW_STEPS(1) AGENT_SHOW_DETAILS(0) AGENT_STREAM(1) AGENT_NATIVE_TOOLS(1)   # 0/1
 ```
 Full list: `autorcode help`
 
 ## Development / tests
 ```bash
 python3 -m compileall -q harness agent.py
-python3 -m unittest discover -s tests -v     # CI: GitHub Actions (.github/workflows/test.yml)
+python3 -m unittest discover -s tests -v     # 137 tests · CI: GitHub Actions (.github/workflows/test.yml)
 ```
 
 ## Contact / collaboration
