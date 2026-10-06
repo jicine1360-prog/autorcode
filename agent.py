@@ -50,6 +50,9 @@ def main() -> int:
         cfg.session_file = args.session
     config.setup_logging(args.verbose)
 
+    for warning in config.preflight(cfg):
+        print(warning, file=sys.stderr)
+
     from harness import tools as tools_mod
     if args.tools:
         print(tools_mod.schema_text())

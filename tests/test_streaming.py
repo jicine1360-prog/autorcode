@@ -60,8 +60,8 @@ class StreamingTests(unittest.TestCase):
             thread.join(2)
         self.assertEqual(errors, [])
         self.assertTrue(payloads[0]["stream"])
-        self.assertEqual(json.loads(results[0])["answer"], "안녕")
-        self.assertEqual(events[-1][1], len(results[0]))
+        self.assertEqual(json.loads(results[0].content)["answer"], "안녕")
+        self.assertEqual(events[-1][1], len(results[0].content))
         self.assertNotIn("INTERNAL_NOT_DISPLAYED", str(events) + str(results))
 
     def test_incomplete_stream_and_length_limit(self):
@@ -92,7 +92,7 @@ class StreamingTests(unittest.TestCase):
         worker.join(3)
         self.assertFalse(worker.is_alive(),
                          "finish_reason 이후에도 스트림 루프가 종료되지 않음")
-        self.assertEqual(json.loads(result[0])["answer"], "ok")
+        self.assertEqual(json.loads(result[0].content)["answer"], "ok")
 
     def test_keep_alive_server_does_not_hang(self):
         """[DONE]도 finish_reason도 없이 연결만 열어두는 서버는 수신 상한에 걸려야 한다."""
@@ -121,7 +121,7 @@ class StreamingTests(unittest.TestCase):
         with patch("harness.llm.urllib.request.urlopen", side_effect=[OSError("offline"), response]), \
              patch("harness.llm.time.sleep"):
             result = client.chat([], "test", stream=True, on_event=lambda *args: events.append(args))
-        self.assertEqual(json.loads(result)["answer"], "ok")
+        self.assertEqual(json.loads(result.content)["answer"], "ok")
         self.assertEqual(events[0][0], "retry")
         self.assertEqual(events[-1][0], "received")
 

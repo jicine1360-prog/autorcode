@@ -683,6 +683,82 @@ def schema_text() -> str:
     return "\n".join(f"- {name}: {desc}" for name, desc in SCHEMAS.items())
 
 
+_ARGS_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\?)?:(.+)$")
+_TYPE_MAP = {"str": "string", "int": "integer", "float": "number",
+             "bool": "boolean", "object": "object", "list": "array"}
+
+
+def _value_schema(val: str) -> dict:
+    val = val.strip()
+    m = re.match(r"^([A-Za-z]+)(?:\(([^)]*)\))?$", val)
+    if m:
+        base, comment = m.group(1), (m.group(2) or "").strip()
+        schema = {"type": _TYPE_MAP.get(base, "string")}
+        if comment:
+            schema["description"] = comment
+        return schema
+    if "|" in val:
+        enum = [t.strip().strip("'\"") for t in val.split("|")]
+        return {"enum": enum, "type": "string"}
+    return {"type": "string"}
+
+
+def _json_schema(argspec: str) -> dict:
+    """'args: {command:str, max_lines?:int}' 형식을 JSON Schema 로 변환한다."""
+    start = argspec.find("{", argspec.find("args:"))
+    if start < 0:
+        return {"type": "object", "properties": {}, "additionalProperties": True}
+    depth = 0
+    end = start
+    for i in range(start, len(argspec)):
+        if argspec[i] == "{":
+            depth += 1
+        elif argspec[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    inner = argspec[start + 1:end] if depth == 0 else ""
+    properties, required = {}, []
+    for token in inner.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        m = _ARGS_RE.match(token)
+        if not m:
+            continue
+        name, optional, val = m.group(1), bool(m.group(2)), m.group(3)
+        properties[name] = _value_schema(val)
+        if not optional:
+            required.append(name)
+    return {"type": "object", "properties": properties,
+            "required": required, "additionalProperties": True}
+
+
+def native_schemas() -> list:
+    """OpenAI function calling 용 스키마 목록. SCHEMAS 기술문이 단일 진실원이다."""
+    out = []
+    for name, desc in SCHEMAS.items():
+        argspec = desc.split("—", 1)[0]
+        out.append({"type": "function",
+                    "function": {"name": name, "description": desc,
+                                 "parameters": _json_schema(argspec)}})
+    out.append({"type": "function",
+                "function": {"name": "done",
+                             "description": "모든 작업이 끝나 최종 답변을 낼 준비가 되면 호출하라. "
+                                            "answer에 사용자에게 보일 최종/요약 답변을 채워라.",
+                             "parameters": {"type": "object",
+                                            "properties": {
+                                                "thought": {"type": "string",
+                                                            "description": "완료 근거 요약"},
+                                                "answer": {"type": "string",
+                                                           "description": "최종 답변"},
+                                            },
+                                            "required": ["answer"],
+                                            "additionalProperties": True}}})
+    return out
+
+
 def execute(name: str, args: Args, root: str, max_output: int, timeout: int) -> str:
     fn = TOOLS.get(name)
     if fn is None:

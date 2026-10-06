@@ -12,7 +12,7 @@ from unittest.mock import patch
 from harness.agent_core import Agent, parse_action
 from harness.cli import main, repl_command
 from harness.config import Config
-from harness.llm import LLMError, LengthError
+from harness.llm import Reply, LLMError, LengthError
 from harness.progress import Progress, result_status, terminal_line, tool_label
 
 
@@ -24,7 +24,8 @@ class ScriptedModel:
         action = next(self.actions)
         if isinstance(action, BaseException):
             raise action
-        return json.dumps(action, ensure_ascii=False) if isinstance(action, dict) else action
+        text = json.dumps(action, ensure_ascii=False) if isinstance(action, dict) else action
+        return Reply(text)
 
 
 class ProgressTests(unittest.TestCase):
@@ -217,6 +218,7 @@ class ProgressTests(unittest.TestCase):
         stdout, stderr = io.StringIO(), io.StringIO()
         with patch("sys.argv", ["autorcode", "run", "test:latest", "do it", "--quiet"]), \
              patch("harness.cli._names", return_value=["test:latest"]), \
+             patch("harness.cli.config.preflight", return_value=[]), \
              patch("harness.cli.config.setup_logging"), \
              patch("harness.agent_core.llm.OpenAICompatibleLLM", return_value=ScriptedModel(
                  {"done": True, "answer": "final answer"})), \

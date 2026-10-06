@@ -9,8 +9,8 @@ import json
 import logging
 import os
 import re
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
 
 from . import llm, memory, notes, permissions, router, tools
@@ -35,6 +35,7 @@ SYSTEM_TEMPLATE = """너는 도구를 써서 컴퓨터를 조작하는 에이전
 {tools}
 
 규칙:
+- 도구 호출은 네이티브 function calling(tool_calls)을 우선 사용하라. 서버가 지원하지 않거나 실패하면 아래 (A)/(B)/(C) JSON 규식으로 출력하라. 도구 결과는 tool 메시지로 돌아온다.
 - 너는 웹에 접근할 수 있다(web_search/web_fetch/youtube). 로컬 모델이라는 이유로 "인터넷 불가"라고 단정하지 마라 — 뉴스·검색·URL·유튜브 과제는 무조건 해당 도구를 먼저 시도하고, 실패했을 때만 보고하라.
 - 서버/시스템 성격을 파악했으면(명령 결과로 확인한 CPU·메모리·디스크·OS·서비스·디렉터리 구조 등) 그 내용을 remember 도구로 기억에 저장하라. 이후 같은 질문이 오면 재탐색하지 말고 recall로 확인한 뒤 기억에서 답하라.
 - 도구 결과는 [도구 결과]로 돌아온다. 그 전에는 다음 행동을 정하지 마라.
@@ -96,6 +97,7 @@ class Agent:
         if saved:
             system += f"\n\n[이전에 파악한 사실 — 재탐색 말고 이걸 활용]\n{saved[:cfg.memory_max_chars]}"
         self.mem = memory.Memory(system, cfg.context_tokens)
+        self.tool_schemas = tools.native_schemas() if cfg.native_tools else None
         if cfg.use_mock:
             self.llm = llm.MockModel()
             log.info("mock 모드 (AGENT_BASE_URL/AGENT_PROVIDER 미설정)")
@@ -144,13 +146,12 @@ class Agent:
         result = tools.execute(name, args, cfg.workspace_root, cfg.max_output, cfg.bash_timeout)
         return result, time.monotonic() - started
 
-    def _run_action(self, action, step=1):
-        batch = action.get("actions", [action])
-        results = [None] * len(batch)
+    def _execute_items(self, items, step=1):
+        """[(tool, args)] 를 게이트 후 실행해 결과 리스트로 반환한다."""
+        results = [None] * len(items)
         ready = []
         # input()을 작업 스레드에서 동시에 호출하지 않는다. 승인은 실행 전에 직렬 처리.
-        for i, item in enumerate(batch):
-            name, args = item["tool"], item.get("args", {})
+        for i, (name, args) in enumerate(items):
             label = f"{step}.{i + 1} {tool_label(name, args)}"
             err = self._gate(name, args)
             if err:
@@ -158,22 +159,9 @@ class Agent:
                 self.progress.result(label, results[i], 0)
             else:
                 ready.append((i, name, args, label))
-
-        parallel = len(ready) > 1 and all(item[1] in PARALLEL_READ_TOOLS for item in ready)
+        parallel = len(ready) > 1 and all(it[1] in PARALLEL_READ_TOOLS for it in ready)
         if parallel:
-            with self.progress.activity(f"[{step}] 독립 조회 {len(ready)}개 병렬 실행") as activity:
-                with ThreadPoolExecutor(max_workers=min(len(ready), self.cfg.max_actions)) as pool:
-                    pending = {}
-                    for i, name, args, label in ready:
-                        self.progress.event(f"  [실행] {label}")
-                        pending[pool.submit(self._execute, name, args)] = (i, label)
-                    for future in as_completed(pending):
-                        i, label = pending[future]
-                        result, elapsed = future.result()
-                        results[i] = result
-                        self.progress.result(label, result, elapsed)
-                        left = sum(value is None for value in results)
-                        self.progress.update(activity, f"병렬 조회 · {left}개 남음")
+            self._parallel_ready(ready, results, step)
         else:
             if len(ready) > 1:
                 self.progress.event(f"[{step}] 쓰기·셸·영상 작업 포함 — 순서대로 실행")
@@ -182,15 +170,57 @@ class Agent:
                     result, elapsed = self._execute(name, args)
                 results[i] = result
                 self.progress.result(label, result, elapsed)
+        return results
+
+    def _parallel_ready(self, ready, results, step):
+        """독립 조회 도구들을 daemon 스레드로 병렬 실행.
+
+        daemon 스레드라 Ctrl+C 로 주입되면 in-flight 도구가 백그라운드에서
+        제한 시간 안에 끝나도 프로세스 종료를 막지 않는다. (non-daemon 풀의
+        shutdown(wait=True) 이 Ctrl+C 를 지연시키던 문제 제거)
+        """
+        jobs = list(ready)
+        next_idx = [0]
+        lock = threading.Lock()
+        total = len(jobs)
+
+        def worker():
+            while True:
+                with lock:
+                    if next_idx[0] >= total:
+                        return
+                    k = next_idx[0]
+                    next_idx[0] += 1
+                i, name, args, label = jobs[k]
+                self.progress.event(f"  [실행] {label}")
+                result, elapsed = self._execute(name, args)
+                results[i] = result
+                self.progress.result(label, result, elapsed)
+
+        n_workers = min(total, self.cfg.max_actions)
+        threads = [threading.Thread(target=worker, name="autorcode-tool",
+                                    daemon=True) for _ in range(n_workers)]
+        with self.progress.activity(f"[{step}] 독립 조회 {total}개 병렬 실행"):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+    def _run_action(self, action, step=1):
+        batch = action.get("actions", [action])
+        items = [(a["tool"], a.get("args", {})) for a in batch]
+        obs = self._execute_items(items, step)
         if "actions" in action:
-            return "\n".join(f"<{item['tool']}> {result}" for item, result in zip(batch, results))
-        return results[0]
+            return "\n".join(f"<{item[0]}> {result}"
+                             for item, result in zip(items, obs))
+        return obs[0]
 
     # ---------- 메인 루프 ----------
     def run(self, task: str) -> str:
         try:
             return self._run(task)
         except KeyboardInterrupt:
+            self.mem.strip_open_tool_round()
             self.progress.event("[중단] 사용자가 현재 작업을 중단했습니다")
             self.mem.add("user", "[도구 결과] 사용자가 작업을 중단했습니다. 완료로 간주하지 마세요.")
             return "[중단] 현재 작업 취소. 새 요청을 입력할 수 있습니다."
@@ -227,8 +257,10 @@ class Agent:
                             self.progress.event(f"[{step}] {value}")
                             self.progress.update(activity, value)
 
-                    resp = self.llm.chat(msgs, model, stream=cfg.stream, on_event=on_event)
-                self.progress.event(f"[{step}] 모델 응답 수신 완료 · {activity.elapsed:.1f}s · {len(resp):,}자")
+                    resp = self.llm.chat(msgs, model, stream=cfg.stream,
+                                         on_event=on_event, tools=self.tool_schemas)
+                content = resp.content or ""
+                self.progress.event(f"[{step}] 모델 응답 수신 완료 · {activity.elapsed:.1f}s · {len(content):,}자")
             except llm.LengthError:
                 violations += 1
                 self.progress.event(f"[{step}] 답변 길이 초과 — 더 짧게 재요청 {violations}/3")
@@ -241,24 +273,84 @@ class Agent:
                 self.progress.event(f"[실패] 모델 요청: {e}")
                 return f"[중단] LLM 호출 불가: {e}"
             stats["llm_calls"] += 1
-            stats["out_tokens"] += memory.estimate(resp)
-            self.mem.add("assistant", resp, stats)
+            content = resp.content or ""
+            stats["out_tokens"] += memory.estimate(content)
+            tool_calls = resp.tool_calls
+
+            if tool_calls:
+                # 네이티브 function calling 라운드
+                violations = 0
+                done_call = next(
+                    (tc for tc in tool_calls
+                     if (tc.get("function") or {}).get("name") == "done"),
+                    None)
+                if done_call is not None:
+                    raw = (done_call.get("function") or {}).get("arguments")
+                    try:
+                        args = json.loads(raw) if isinstance(raw, str) and raw else {}
+                    except ValueError:
+                        args = {}
+                    if not isinstance(args, dict):
+                        args = {}
+                    ans = str(args.get("answer") or "(빈 답변)")
+                    stats["out_tokens"] += memory.estimate(str(raw))
+                    summary = (f"[{tier}/{model} · {step}스텝 · 도구{sum(stats['tools'].values())}회"
+                               f" · in~{stats['in_tokens']}tok/out~{stats['out_tokens']}tok"
+                               f" · {time.monotonic() - t0:.1f}s]")
+                    self.progress.event(f"[완료] {step}스텝 · native done · 도구 요청 {sum(stats['tools'].values())}회")
+                    return f"{summary}\n{ans}"
+                actions = []
+                for tc in tool_calls:
+                    fn = tc.get("function") or {}
+                    name = fn.get("name")
+                    if not isinstance(name, str) or not name:
+                        continue
+                    raw = fn.get("arguments")
+                    try:
+                        args = json.loads(raw) if isinstance(raw, str) and raw else {}
+                    except ValueError:
+                        args = {}
+                    if not isinstance(args, dict):
+                        args = {}
+                    actions.append({"tool": name, "args": args})
+                if not actions or len(actions) > cfg.max_actions:
+                    violations += 1
+                    reason = (f"한 단계 도구 한도 {cfg.max_actions}개 초과" if len(actions) > cfg.max_actions
+                              else "tool_calls 에 유효한 호출 없음")
+                    log.warning("네이티브 툴 규식 위반(step %d): %s — %s", step, reason, short(content, 300))
+                    if violations >= 3:
+                        return "[중단] 모델이 tool_calls 규식을 3회 위반"
+                    self.mem.add("user", REPAIR_MSG, stats)
+                    continue
+                self.mem.add_assistant_toolcalls(tool_calls, content)
+                for a in actions:
+                    n = a["tool"]
+                    stats["tools"][n] = stats["tools"].get(n, 0) + 1
+                log.info("step %d: native tools=%s", step,
+                         ", ".join(a["tool"] for a in actions))
+                obs = self._execute_items([(a["tool"], a["args"]) for a in actions], step)
+                self.mem.add_tool_results(
+                    [c.get("id") or f"call_{step}_{i}" for i, c in enumerate(tool_calls)],
+                    [o[:cfg.max_output] for o in obs])
+                continue
+
+            self.mem.add("assistant", content, stats)
             try:
-                action = parse_action(resp)
+                action = parse_action(content)
                 if len(action.get("actions", [])) > cfg.max_actions:
                     raise ValueError(f"한 단계 도구 한도 {cfg.max_actions}개 초과")
             except ValueError as e:
                 violations += 1
-                if violations == 1 and not _JSON_HINT.search(resp):
+                if violations == 1 and not _JSON_HINT.search(content):
                     # 도구 규식 JSON이 전혀 없는 평문 답변 — 캐주얼 채팅이므로
                     # 모델이 뭘 하지 않고 바로 답한 것으로 인정하고 중단하지 않는다.
-                    ans = resp.strip() or "(빈 답변)"
+                    ans = content.strip() or "(빈 답변)"
                     summary = (f"[{tier}/{model} · {step}스텝 · 도구{sum(stats['tools'].values())}회"
                                f" · in~{stats['in_tokens']}tok/out~{stats['out_tokens']}tok"
                                f" · {time.monotonic() - t0:.1f}s]")
                     self.progress.event(f"[{step}] 도구 규식 아닌 평문 답변을 바로 답으로 인정")
                     return f"{summary}\n{ans}"
-                log.warning("JSON 파싱 실패(step %d) 응답: %s", step, short(resp, 400))
+                log.warning("JSON 파싱 실패(step %d) 응답: %s", step, short(content, 400))
                 self.progress.event(f"[{step}] 응답 형식 재요청 {violations}/3 · {e}")
                 if violations >= 3:
                     return "[중단] 모델이 JSON 규식을 3회 위반 — AGENT_MODEL 교체 또는 --provider ollama 확인"
@@ -316,4 +408,5 @@ class Agent:
                         n += 2
                 except ValueError:
                     continue
+        self.mem.repair()
         log.info("세션 재개: %s (%d 턴)", path, n)

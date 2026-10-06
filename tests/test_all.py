@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from harness import config, memory, permissions, safety, tokens, tools, webtools  # noqa: E402
+from harness import config, llm, memory, permissions, safety, tokens, tools, webtools  # noqa: E402
 from harness.agent_core import Agent, parse_action  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -131,9 +131,11 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         has_obs = any(m["role"] == "user" and m["content"].startswith("[도구 결과]")
+                      or m["role"] == "tool"
                       for m in body["messages"])
         c = _Handler.content(has_obs, body)
-        d = json.dumps({"choices": [{"message": {"content": c}}]}).encode()
+        msg = c if isinstance(c, dict) else {"content": c}
+        d = json.dumps({"choices": [{"message": msg}]}).encode()
         self.send_response(200)
         self.send_header("Content-Length", str(len(d)))
         self.end_headers()
@@ -193,6 +195,116 @@ class TestAgentLoop(unittest.TestCase):
             json.dumps({"tool": "bash", "args": {"command": "cat ~/.ssh/id_rsa"}})))
         out = Agent(self._cfg()).run("비밀파일 읽기")
         self.assertIn("거부", out)
+
+    def test_native_tool_calls_round(self):
+        """네이티브 tool_calls → assistant(tc)+role:tool 시퀀스 보존 → done."""
+        seen = {}
+        def content(obs, b):
+            if seen.get("step1") and not seen.get("step2"):
+                seen["pair"] = (
+                    any(m.get("tool_calls") for m in b["messages"] if m["role"] == "assistant"),
+                    any(m["role"] == "tool" for m in b["messages"]),
+                )
+                seen["step2"] = True
+                return json.dumps({"done": True, "answer": "네이티브 완료"})
+            seen["step1"] = True
+            return {"content": None,
+                    "tool_calls": [{"id": "call_n1", "type": "function",
+                                    "function": {"name": "bash",
+                                                 "arguments": json.dumps(
+                                                     {"command": "echo NATIVE_OK"})}}]}
+        _Handler.content = staticmethod(content)
+        out = Agent(self._cfg()).run("네이티브 확인")
+        self.assertIn("네이티브 완료", out)
+        self.assertIn("2스텝", out)
+        self.assertEqual(seen["pair"], (True, True))
+
+
+class TestLLMToolsFallback(unittest.TestCase):
+    """서버가 tools 파라미터를 400으로 거부하면 llm.py 가 tools 없이 재시도한다."""
+
+    class _H(_Handler):
+        reject = False
+        reply = staticmethod(lambda obs, b: "ok")
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if self.reject and "tools" in body:
+                self.send_response(400)
+                payload = b'{"error":{"message":"tools unsupported"}}'
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            msg = self.reply(False, body)
+            msg = msg if isinstance(msg, dict) else {"content": msg}
+            d = json.dumps({"choices": [{"message": msg}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(d)))
+            self.end_headers()
+            self.wfile.write(d)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = HTTPServer(("127.0.0.1", 0), cls._H)
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+        cls.port = cls.srv.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
+    def test_tools_rejected_then_retry_without(self):
+        self._H.reject = True
+        try:
+            client = llm.OpenAICompatibleLLM(f"http://127.0.0.1:{self.port}/v1", "t", 10, 1, 0.1)
+            r = client.chat([{"role": "user", "content": "hi"}], "m",
+                            tools=[{"type": "function", "function": {
+                                "name": "bash", "parameters": {"type": "object"}}}])
+            self.assertEqual(r.content, "ok")
+            self.assertIsNone(r.tool_calls)
+        finally:
+            self._H.reject = False
+
+
+class TestMemoryPairing(unittest.TestCase):
+    def _mem(self):
+        m = memory.Memory("s" * 50, 10 ** 9)
+        m.turns = [
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "c1", "function": {"name": "bash", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+            {"role": "tool", "tool_call_id": "zz", "content": "orphan"},
+            {"role": "assistant", "content": "dangling",
+             "tool_calls": [{"id": "c2", "function": {"name": "x", "arguments": "{}"}}]},
+            {"role": "user", "content": "new task"},
+        ]
+        return m
+
+    def test_repair_keeps_round_drops_orphans_and_dangling(self):
+        m = self._mem()
+        m.repair()
+        self.assertIn("c1", [t.get("tool_call_id") for t in m.turns])
+        self.assertNotIn("zz", [t.get("tool_call_id") for t in m.turns])
+        self.assertNotIn("dangling", [t.get("content") for t in m.turns])
+        # 남은 assistant(tool_calls) 는 전부 결과와 1:1 페어링 확인됨
+        owners = [t for t in m.turns if t.get("role") == "assistant" and t.get("tool_calls")]
+        results = {t.get("tool_call_id") for t in m.turns if t.get("role") == "tool"}
+        for t in owners:
+            ids = {c.get("id") for c in t.get("tool_calls", []) if c.get("id")}
+            self.assertTrue(ids <= results)
+
+    def test_messages_has_no_dangling_open_round(self):
+        m = memory.Memory("s" * 50, 10 ** 9)
+        m.turns = [
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "c9", "function": {"name": "bash", "arguments": "{}"}}]},
+        ]
+        m.strip_open_tool_round()
+        self.assertNotIn("tool_calls", m.turns[-1])
 
 
 class TestSession(unittest.TestCase):

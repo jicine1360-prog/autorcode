@@ -131,14 +131,13 @@ GPU 없이 즉시 사용 (OpenRouter — 모델명 '/' 포함)
   대화 중 /status /tools /steps on|off /details on|off /help 사용 가능
   업데이트 뒤에는 exit 후 다시 실행해야 새 기능이 적용됨
 
-도구 프로토콜 (모델의 1스텝 출력 규식)
-  A {"tool":"bash","args":{"command":"ls"}}        단독
-  B {"actions":[{...},{...}]}                      병렬 (최대 4개)
-  C {"done":true,"answer":"..."}                    종료
-
-도구: bash / read_file / write_file / edit_file / list_dir / grep_files
+도구 프로토콜 (네이티브 function calling 우선, 불가능한 서버는 JSON 규식)
+  네이티브: OpenAI tools 스키마 전달 → tool_calls 로 도구 호출 (AGENT_NATIVE_TOOLS=0 으로 끔)
+  JSON: {"tool":"bash","args":{"command":"ls"}} / {"actions":[...]} / {"done":true,"answer":"..."}
+  주요 도구: bash / read_file / write_file / edit_file / list_dir / grep_files
       web_search(웹검색·키불필요) / web_fetch(웹페이지) / youtube(메타+자막)
       remember / recall / forget(영속 기억 — 파악한 사실 저장, 재탐색 방지)
+  중간 정지: 실행 중 언제든 Ctrl+C 로 취소 (REPL은 계속, 진행 중 도구는 백그라운드 정리)
 격리: cwd 샌드박스 + 차단패턴(sudo rm -rf /, curl|sh, 포크폭탄…) +
       RLIMIT(CPU/MEM/FSIZE/NPROC) + 타임아웃 시 프로세스그룹째 KILL +
       웹 도구 SSRF 가드(사설 IP·내부 포트 접근 거부)
@@ -296,6 +295,8 @@ def _make_cfg(model: str, rest) -> config.Config:
             f"~/.autorcode/session_{hashlib.md5(cfg.workspace_root.encode()).hexdigest()[:10]}.jsonl")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         cfg.session_file = path
+    for warning in config.preflight(cfg):
+        print(warning, file=sys.stderr)
     return cfg
 
 
@@ -425,7 +426,8 @@ def cmd_chat(args):
             return 0
         messages.append({"role": "user", "content": q})
         try:
-            a = client.chat(messages, model)
+            reply = client.chat(messages, model)
+            a = reply.content
         except llm.LLMError as e:
             print(f"[오류] {e}")
             continue
