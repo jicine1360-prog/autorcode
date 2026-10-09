@@ -114,6 +114,8 @@ HELP_TEXT = """autorcode — 모델 라우팅 + 도구 실행 에이전트 (로�
   autorcode run phi4 --quiet        과정 출력 끄기 (기본: 스텝마다 실시간 표시)
   autorcode run phi4 --details      도구 결과 미리보기 확대 (3줄 → 12줄)
   autorcode run phi4 --no-stream    SSE 미지원 서버에 일반 JSON 요청
+  autorcode run qwen3.6:35b --reasoning-effort none   thinking 모델 추론 끔 (답 잘림 방지)
+  autorcode run phi4 --max-tokens 32768               응답 출력 토큰 상한 늘리기
   autorcode run phi4 --session h.jsonl   히스토리 저장/재개
   autorcode run phi4 --no-session         기본 자동 세션(작업폴더별) 끔
   autorcode chat phi4               도구 없는 단순 채팅
@@ -150,7 +152,7 @@ GPU 없이 즉시 사용 (OpenRouter — 모델명 '/' 포함)
 환경변수 (AGENT_*)
   MODEL_FAST(기본 phi4:latest) MODEL_SMART(qwen3.8:27b-hunmin-64k)
   API_TIMEOUT(120) MAX_STEPS(15) BASH_TIMEOUT(30) CONTEXT_TOKENS(40000)
-  MAX_TOKENS(2048) RLIMIT_MEM_MB(4096) SESSION, PERMS
+  MAX_TOKENS(8192) REASONING_EFFORT(로컬 기본 none) RLIMIT_MEM_MB(4096) SESSION, PERMS
   MEMORY_FILE(기본 ~/.autorcode/memory.txt) MEMORY_MAX_CHARS(3000)
   SHOW_STEPS(1) SHOW_DETAILS(0) STREAM(1) — 0/1로 표시·스트리밍 설정
   OPENROUTER_API_KEY=sk-or-...  OPENROUTER_MODEL(기본 deepseek/deepseek-chat-v3)
@@ -272,11 +274,24 @@ def _confirmer(progress=None, mode="auto"):
     return gate
 
 
+def _is_local(base_url: str) -> bool:
+    """로컬 ollama 엔드포인트인지 — thinking 기본값(none)을 켤지 판단한다."""
+    return "127.0.0.1" in base_url or "localhost" in base_url
+
+
 def _make_cfg(model: str, rest) -> config.Config:
     cfg = config.load()
     cfg.base_url, cfg.api_key = _resolve_backend(model)
     cfg.model_fast = model
     cfg.model_smart = model
+    # 로컬 thinking 모델(qwen3 등)은 추론이 max_tokens를 다 써서 답이 잘린다.
+    # 스트릭트 JSON 하네스에서는 추론을 끄는 게 맞다 (클라우드는 건드리지 않음).
+    if not cfg.reasoning_effort and _is_local(cfg.base_url):
+        cfg.reasoning_effort = "none"
+    if getattr(rest, "max_tokens", None):
+        cfg.max_tokens = rest.max_tokens
+    if getattr(rest, "reasoning_effort", None) is not None:
+        cfg.reasoning_effort = rest.reasoning_effort
     if rest.yes:
         cfg.auto_yes = True
     if getattr(rest, "auto", False):
@@ -415,7 +430,12 @@ def cmd_chat(args):
     model = _match_model(args.model, names) or args.model
     messages = [{"role": "system", "content": "간결하게 한국어로 답한다."}]
     base_url, api_key = _resolve_backend(model)
-    client = llm.OpenAICompatibleLLM(base_url, api_key, 120, 2, 0.3)
+    effort = args.reasoning_effort
+    if effort is None:
+        effort = "none" if _is_local(base_url) else ""
+    max_tokens = args.max_tokens or int(os.getenv("AGENT_MAX_TOKENS", "8192"))
+    client = llm.OpenAICompatibleLLM(base_url, api_key, 120, 2, 0.3,
+                                     max_tokens, effort)
     print(f"=== autorcode chat {model} (도구 없음/{'OpenRouter' if '/' in model else 'ollama'}) === exit 종료")
     while True:
         try:
@@ -453,6 +473,10 @@ def main() -> int:
     p.add_argument("--quiet", action="store_true", help="과정 출력 끔 (결과만)")
     p.add_argument("--details", action="store_true", help="도구 결과 미리보기 확대")
     p.add_argument("--no-stream", action="store_true", help="SSE 대신 일반 JSON 응답 사용")
+    p.add_argument("--max-tokens", type=int, default=None,
+                   help="응답 최대 출력 토큰 (기본 AGENT_MAX_TOKENS=8192)")
+    p.add_argument("--reasoning-effort", default=None,
+                   help="thinking 모델 추론 제어: none=추론 끔(로컬 기본) · low/medium/high")
     p.add_argument("--verbose", action="store_true", help="진단 로그 출력")
     p.add_argument("--session", help="히스토리 jsonl")
     p.add_argument("--no-session", action="store_true", help="기본 세션 저장 끔")
@@ -462,6 +486,10 @@ def main() -> int:
     p.set_defaults(fn=cmd_list)
     p = sub.add_parser("chat", help="도구 없는 단순 채팅")
     p.add_argument("model")
+    p.add_argument("--max-tokens", type=int, default=None,
+                   help="응답 최대 출력 토큰 (기본 AGENT_MAX_TOKENS=8192)")
+    p.add_argument("--reasoning-effort", default=None,
+                   help="thinking 모델 추론 제어: none=추론 끔(로컬 기본)")
     p.set_defaults(fn=cmd_chat)
     p = sub.add_parser("doctor", help="환경 진단")
     p.set_defaults(fn=cmd_doctor)

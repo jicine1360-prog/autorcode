@@ -202,7 +202,8 @@ AGENT_BASE_URL/AGENT_API_KEY   openai switch: https://api.openai.com/v1 + sk-...
 AGENT_MODEL_FAST/SMART         ollama model names (default qwen3:30b-a3b / qwen3.8:latest)
 AGENT_PERMS                    yolo | balanced (default) | strict
 AGENT_MAX_STEPS(15) AGENT_BASH_TIMEOUT(30) AGENT_CONTEXT_TOKENS(40000)
-AGENT_RLIMIT_MEM_MB(4096) AGENT_RLIMIT_NPROC(128) AGENT_MAX_TOKENS(2048)
+AGENT_RLIMIT_MEM_MB(4096) AGENT_RLIMIT_NPROC(128) AGENT_MAX_TOKENS(8192)
+AGENT_REASONING_EFFORT(none)   # thinking models: none·low·medium·high (local default none)
 AGENT_SHOW_STEPS(1) AGENT_SHOW_DETAILS(0) AGENT_STREAM(1) AGENT_NATIVE_TOOLS(1)   # 0/1
 ```
 Full list: `autorcode help`

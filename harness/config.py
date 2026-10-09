@@ -25,6 +25,10 @@ class Config:
     model_smart: str = os.getenv("AGENT_MODEL_SMART", "gpt-4o")
     temperature: float = float(os.getenv("AGENT_TEMPERATURE", "0.1"))
     max_tokens: int = int(os.getenv("AGENT_MAX_TOKENS", "8192"))
+    # thinking 모델(qwen3 등)의 reasoning을 끈다. 빈 값이면 요청에 실지 않는다.
+    # 스트릭트 JSON 도구 규식 하네스는 생각이 max_tokens를 잡아먹어
+    # finish_reason=length로 잘려 버리므로 로컬 ollama에서는 기본 "none".
+    reasoning_effort: str = os.getenv("AGENT_REASONING_EFFORT", "")
     api_timeout: int = int(os.getenv("AGENT_API_TIMEOUT", "120"))
     api_retries: int = int(os.getenv("AGENT_API_RETRIES", "3"))
 

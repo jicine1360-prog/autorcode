@@ -65,7 +65,8 @@ def _tool_calls_from_message(message: dict) -> Optional[List[dict]]:
 
 class OpenAICompatibleLLM:
     def __init__(self, base_url: str, api_key: str, timeout: int,
-                 retries: int, temperature: float, max_tokens: int = 8192):
+                 retries: int, temperature: float, max_tokens: int = 8192,
+                 reasoning_effort: str = ""):
         if not base_url.startswith(("http://", "https://")):
             raise LLMError(f"잘못된 base_url: {base_url!r}")
         self.endpoint = base_url.rstrip("/") + "/chat/completions"
@@ -74,6 +75,7 @@ class OpenAICompatibleLLM:
         self.retries = max(1, retries)
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.reasoning_effort = reasoning_effort
 
     def chat(self, messages: List[ChatMessage], model: str, *, stream=False,
              on_event=None, tools=None) -> Reply:
@@ -85,6 +87,8 @@ class OpenAICompatibleLLM:
             "max_tokens": self.max_tokens,
             "stream": stream,
         }
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
         if tools:
             payload["tools"] = tools
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")

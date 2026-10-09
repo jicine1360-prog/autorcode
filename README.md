@@ -231,7 +231,8 @@ AGENT_BASE_URL/AGENT_API_KEY   openai 전환: https://api.openai.com/v1 + sk-...
 AGENT_MODEL_FAST/SMART         ollama 모델명 (기본 qwen3:30b-a3b / qwen3.8:latest)
 AGENT_PERMS                    yolo | balanced(기본) | strict
 AGENT_MAX_STEPS(15) AGENT_BASH_TIMEOUT(30) AGENT_CONTEXT_TOKENS(40000)
-AGENT_RLIMIT_MEM_MB(4096) AGENT_RLIMIT_NPROC(128) AGENT_MAX_TOKENS(2048)
+AGENT_RLIMIT_MEM_MB(4096) AGENT_RLIMIT_NPROC(128) AGENT_MAX_TOKENS(8192)
+AGENT_REASONING_EFFORT(none)   # thinking 모델 추론 제어: none·low·medium·high (로컬 기본 none)
 AGENT_SHOW_STEPS(1) AGENT_SHOW_DETAILS(0) AGENT_STREAM(1) AGENT_NATIVE_TOOLS(1)   # 0/1
 ```
 전체 목록: `autorcode help`

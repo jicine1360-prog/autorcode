@@ -268,6 +268,45 @@ class TestLLMToolsFallback(unittest.TestCase):
             self._H.reject = False
 
 
+class TestReasoningEffort(unittest.TestCase):
+    """thinking 모델(qwen3 등) 대응 — reasoning_effort 가 있을 때만 페이로드에 싣는다."""
+
+    class _H(_Handler):
+        last = {}
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            type(self).last = body
+            d = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(d)))
+            self.end_headers()
+            self.wfile.write(d)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = HTTPServer(("127.0.0.1", 0), cls._H)
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+        cls.port = cls.srv.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
+    def test_sent_when_configured(self):
+        client = llm.OpenAICompatibleLLM(f"http://127.0.0.1:{self.port}/v1", "t",
+                                         5, 1, 0.1, 8192, "none")
+        client.chat([{"role": "user", "content": "hi"}], "m")
+        self.assertEqual(self._H.last.get("reasoning_effort"), "none")
+        self.assertEqual(self._H.last.get("max_tokens"), 8192)
+
+    def test_omitted_when_empty(self):
+        client = llm.OpenAICompatibleLLM(f"http://127.0.0.1:{self.port}/v1", "t", 5, 1, 0.1)
+        client.chat([{"role": "user", "content": "hi"}], "m")
+        self.assertNotIn("reasoning_effort", self._H.last)
+
+
 class TestMemoryPairing(unittest.TestCase):
     def _mem(self):
         m = memory.Memory("s" * 50, 10 ** 9)

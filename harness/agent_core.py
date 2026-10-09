@@ -104,7 +104,7 @@ class Agent:
         else:
             self.llm = llm.OpenAICompatibleLLM(
                 cfg.base_url, cfg.api_key, cfg.api_timeout, cfg.api_retries,
-                cfg.temperature, cfg.max_tokens)
+                cfg.temperature, cfg.max_tokens, cfg.reasoning_effort)
         if cfg.session_file and os.path.isfile(cfg.session_file):
             self._load_session(cfg.session_file)
         self._sess = open(cfg.session_file, "a", encoding="utf-8") if cfg.session_file else None
@@ -265,8 +265,12 @@ class Agent:
                 violations += 1
                 self.progress.event(f"[{step}] 답변 길이 초과 — 더 짧게 재요청 {violations}/3")
                 if violations >= 3:
+                    hint = ("thinking 모델이면 추론이 토큰을 다 쓴 경우입니다 — "
+                            "AGENT_REASONING_EFFORT=none 또는 --reasoning-effort none"
+                            if not cfg.reasoning_effort else
+                            "AGENT_MAX_TOKENS 또는 --max-tokens 를 늘리세요")
                     return ("[중단] 모델 답변이 3회 연속 길이 제한에 걸렸습니다 — "
-                            f"AGENT_MAX_TOKENS(현재 {cfg.max_tokens})를 늘려주세요")
+                            f"AGENT_MAX_TOKENS(현재 {cfg.max_tokens}) · {hint}")
                 self.mem.add("user", LENGTH_MSG, stats)
                 continue
             except llm.LLMError as e:
