@@ -353,6 +353,20 @@ def _forget(_args, root, max_output, timeout):
     return notes.clear()
 
 
+def _memory_reflect(_args, root, max_output, timeout):
+    s = notes.stats()
+    text = notes.load() or "[기억 없음]"
+    return (f"현재 기억: {s['lines']}줄(한도 {s['limit_lines']}), {s['chars']}자"
+            f"(한도 {s['limit_chars']}), 요약줄={'있음' if s['summary'] else '없음'}\n"
+            f"--- 본문 ---\n{text[:max_output - 300]}\n---\n"
+            "줄이 한도에 가까우면(또는 '정리/요약해줘' 요청) 위 내용을 3~5문장 핵심으로 다시 정리해 "
+            "memory_save_summary(summary=...) 로 저장하라. 개별 사실은 지우지 말고 요약에 녹여라.")
+
+
+def _memory_save_summary(args, root, max_output, timeout):
+    return notes.set_summary(str(args.get("summary", "")))
+
+
 def _schedule_add(args, root, max_output, timeout):
     return schedule.add(args.get("title") or "", args.get("start"),
                         args.get("end"), args.get("note") or "", root)
@@ -693,6 +707,8 @@ TOOLS: Dict[str, ToolFn] = {
     "remember": _remember,
     "recall": _recall,
     "forget": _forget,
+    "memory_reflect": _memory_reflect,
+    "memory_save_summary": _memory_save_summary,
     "schedule_add": _schedule_add,
     "schedule_list": _schedule_list,
     "schedule_remove": _schedule_remove,
@@ -732,6 +748,8 @@ SCHEMAS = {
     "geo_nearby": "args: {kind:str, lat?:float, lon?:float, place?:str, radius?:m, limit?:n} — 반경 내 장소 목록. kind: 맛집/카페/관공서/병원/약국/은행/주유소/편의점/주차/역/공원. lat/lon 이 없으면 place 로 찾는다.",
     "geo_route": "args: {from:str, to:str} — 장소명 또는 '위도,경도' 두 지점 자동차 경로(거리·시간·주요구간)",
     "forget": "args: {} — 기억 전체 삭제",
+    "memory_reflect": "args: {} — 지금 기억의 크기/본문을 보고 넘치면 요약으로 재정리할 수 있게 돌려준다",
+    "memory_save_summary": "args: {summary:str} — 기억 전체를 3~5문장으로 압축해 저장(개별 사실은 최신 3개만 유지)",
     **webtools.SCHEMAS,
 }
 

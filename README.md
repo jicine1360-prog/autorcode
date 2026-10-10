@@ -219,6 +219,9 @@ systemctl --user enable --now autorcode-bot
 작업 workspace 는 `~/autorcode-bot`(또는 `AUTORCODE_BOT_WORKSPACE`), 세션·기억과는
 **폰(chat)별로 분리**된다 — 각자의 "기억해"(`~/.autorcode/memory.txt.<chat>`)와
 이야기 맥락(`session_<chat>.jsonl`)이 서로 안 섞인다.
+기억에는 **예산**이 있다(`AUTORCODE_MEMORY_MAX_LINES/MAX_CHARS`, 기본 40줄/4000자) —
+넘치면 오래된 것부터 정리되고, `memory_reflect`/`memory_save_summary` 도구로
+에이전트 스스로 3~5문장 요약으로 재정리할 수 있다.
 
 **스케줄**: "내일 9시 미팅 잡아줘" / "오늘 일정 알려줘" / "그거 지워줘" 를 자연어로
 받아 폰별 일정(`<workspace>/schedule/<chat>.json`)에 저장·조회·삭제하고, 시작
@@ -379,7 +382,7 @@ curl -X POST http://127.0.0.1:8788/tool \
   작업에 필요한 하위 디렉터리 하나를 workspace 로 지정할 것.
 
 - **브리지 도구**: 파일 조회·수정 / 웹검색·웹페이지 / 유튜브 자막 / **엑셀(.xlsx) 생성·요약** /
-  **PDF 텍스트 추출(pdftotext)** / **이미지 OCR(tesseract)** / 영구 기억(remember/recall/forget) /
+  **PDF 텍스트 추출(pdftotext)** / **이미지 OCR(tesseract)** / 영구 기억(remember/recall/forget, 재정리 memory_reflect·memory_save_summary) /
   **system_info (지금 실행 중인 기기의 CPU·메모리·GPU·상주 모델을 라이브로 조회)**
 - **주의**: 브리지는 localhost 바인딩이 기본. 외부 노출 시 반드시
   인증(authelia 등) 뒤에 두고 토큰을 교체하세요.
