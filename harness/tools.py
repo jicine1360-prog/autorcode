@@ -13,6 +13,7 @@ from typing import Callable, Dict
 from . import notes, safety, schedule, webtools
 from . import geo
 from . import goals
+from . import profile
 from . import study
 from . import vision
 
@@ -581,6 +582,21 @@ def _image_describe(args, root, max_output, timeout):
     return _cap(vision.describe(path, q, timeout=max(timeout, 60)), max_output)
 
 
+def _photo_doc(args, root, max_output, timeout):
+    task = str(args.get("task") or "text").strip().lower()
+    lang = str(args.get("lang") or "").strip() or profile.language(notes.chat()) or "한국어"
+    q = vision.question_for(task, lang)
+    if not q:
+        return f"[오류] task 는 {', '.join(vision.TASKS)} 중 하나"
+    path = safety.confine(str(args.get("path", "")), root)
+    out = vision.describe(path, q, timeout=max(timeout, 60))
+    return _cap(f"[{task}→{lang}] {path}\n{out}", max_output)
+
+
+def _set_language(args, root, max_output, timeout):
+    return profile.set_language(notes.chat(), args.get("lang") or "")
+
+
 def _system_info(args, root, max_output, timeout):
     """지금 실제로 실행 중인 기기의 라이브 상태.
 
@@ -732,6 +748,7 @@ TOOLS: Dict[str, ToolFn] = {
     "pdf_read": _pdf_read,
     "image_ocr": _image_ocr,
     "image_describe": _image_describe,
+    "photo_doc": _photo_doc,
     "remember": _remember,
     "recall": _recall,
     "forget": _forget,
@@ -746,6 +763,7 @@ TOOLS: Dict[str, ToolFn] = {
     "goal_list": _goal_list,
     "goal_step": _goal_step,
     "goal_remove": _goal_remove,
+    "set_language": _set_language,
     "geo_geocode": _geo_geocode,
     "geo_nearby": _geo_nearby,
     "geo_route": _geo_route,
@@ -770,6 +788,7 @@ SCHEMAS = {
     "pdf_read": "args: {path:str} — PDF를 텍스트로 추출(pdftotext)",
     "image_ocr": "args: {path:str, lang?:str(kor+eng)} — 사진/스캔 이미지를 OCR로 텍스트화",
     "image_describe": "args: {path:str, question?:str} — VLM(qwen2.5vl 로컬 기본)으로 사진 내용·질문 답변. 폰에서 온 사진 inbox 파일에 저장됨",
+    "photo_doc": "args: {path:str, task?:'text'|'summary'|'translate'|'solve'|'table', lang?:str} — 사진 속 문자 처리. text=추출, translate=지정 언어 번역(lang 생략 시 이 폰 사용자 언어), summary=요약, solve=숙제 풀이, table=표 추출",
     "remember": "args: {fact:str, max_len?:int} — 서버 파악 사실뿐 아니라 '엄마 생일 3월 3일' 같은 개인 사실도 기억에 저장 (폰별 분리, 재방문 방지)",
     "recall": "args: {} — 지금까지 기억한 사실 목록 조회 (이 사람 전용)",
     "schedule_add": "args: {title:str, start:str, end?:str, note?:str} — 일정 저장. start/end 는 서울시간(KST, UTC+9) ISO8601 (예: 2026-10-10T18:00:00). 빈 자리는 첫 표시 시각으로 잡는다.",
@@ -781,6 +800,7 @@ SCHEMAS = {
     "goal_list": "args: {} — 목표와 단계 진행률 목록",
     "goal_step": "args: {key:str, step?:str|number} — 단계 완료(번호 또는 문구 일부, 생략 시 첫 미완료). 마지막 단계면 목표 완료",
     "goal_remove": "args: {key:str} — 목표 삭제",
+    "set_language": "args: {lang:str} — 이 폰 사용자의 언어 설정(한국어/영어/일본어/중국어/스페인어/...). 답변·사진 번역 기본값이 된다",
     "geo_geocode": "args: {query:str} — 주소/장소명 → 위경도+주소 (예: '서울역', '광화문 세종로 1')",
     "geo_nearby": "args: {kind:str, lat?:float, lon?:float, place?:str, radius?:m, limit?:n} — 반경 내 장소 목록. kind: 맛집/카페/관공서/병원/약국/은행/주유소/편의점/주차/역/공원. lat/lon 이 없으면 place 로 찾는다.",
     "geo_route": "args: {from:str, to:str} — 장소명 또는 '위도,경도' 두 지점 자동차 경로(거리·시간·주요구간)",

@@ -24,6 +24,7 @@ from typing import Callable, Optional
 
 from . import goals
 from . import location as loc
+from . import profile
 from . import schedule as sched
 from . import study
 from .agent_core import Agent
@@ -52,7 +53,8 @@ HELP = (
     "'근처/주변'은 내 위치 기준으로 알려드려요.\n"
     "'위치'라고 보내시면 공유 버튼이 올라옵니다.\n"
     "'이번 달 ~~가 목표야' 라고 하면 장기 목표로 등록하고 주기적으로 점검해요.\n"
-    "사진을 보내면(설명 첨부 가능) 로컬 VLM 으로 내용·텍스트를 읽어줘요."
+    "사진을 보내면(설명 첨부 가능) 로컬 VLM 으로 내용·텍스트를 읽어줘요.\n"
+    "답변/번역 언어는 폰별 설정 — '언어를 영어로 해줘' 로 바꿀 수 있어요."
 )
 _LOC_WORDS = ("위치", "gps", "좌표", "지금 있는 곳")
 _LOC_NEAR_WORDS = ("근처", "주변", "가까운")
@@ -234,7 +236,9 @@ class Bot:
             self.send(chat_id, "사진을 받긴 했는데 저장에 실패했어요. 다시 시도 부탁해요.")
             return
         rel = os.path.relpath(path, self._workspace)
-        q = caption or "이 사진에 뭐가 있는지, 텍스트가 있으면 그대로 읽어줘"
+        lang = profile.language(str(chat_id))
+        q = caption or (f"사진 속 문자를 읽어줘. 읽은 언어가 {lang}이 아니면 "
+                        f"{lang}(으)로 번역해서 원문과 함께 보여줘")
         self._handle(chat_id, f"[사진 도착] 파일: {rel}\n요청: {q}")
 
     # -- 명령 --------------------------------------------------------------
@@ -318,6 +322,8 @@ class Bot:
                 mem = load_for(str(chat_id))
                 now = sched.now_seoul().strftime("%Y-%m-%d %H:%M (%A)")
                 front = [f"[현재 시각(서울)] {now}"]
+                front.append(f"[이 사용자의 언어] {profile.language(str(chat_id))}"
+                             " — 답변·사진 번역을 이 언어로 해라")
                 maybe_loc = loc.describe(chat_id)
                 if maybe_loc:
                     front.append(f"[이 사용자의 최근 위치]\n{maybe_loc}")

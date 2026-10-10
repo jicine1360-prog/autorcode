@@ -250,6 +250,11 @@ systemctl --user enable --now autorcode-bot
 사진은 기본 설정에서 밖으로 안 나간다. 클라우드 VLM 쓰려면
 `AUTORCODE_VISION_BASE_URL`/`AUTORCODE_VISION_MODEL`/`AUTORCODE_VISION_KEY` 지정.
 
+**사진 문자 → 자동 번역(폰별 모국어)**: `photo_doc(task=text|translate|summary|solve|table)`
+으로 사진 속 글자를 추출/번역/요약/풀이한다. 모국어는 **폰별** 저장(`profile.json.<chat>`) —
+"언어를 영어로 해줘" 라고 하면 그 뒤 답변·사진 번역이 영어로 나간다(기본 한국어,
+`AUTORCODE_USER_LANG` 변경 가능). 가족이 각자 다른 언어를 써도 된다.
+
 ## GPU 없이 사용하기 (OpenRouter)
 ollama 대신 클라우드 API로 같은 에이전트 호출 — 모델명에 `/`를 넣으면 자동 라우팅됩니다.
 ```bash

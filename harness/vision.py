@@ -23,6 +23,14 @@ MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
         ".gif": "image/gif", ".webp": "image/webp"}
 
+TASKS = {
+    "text": "이미지에서 보이는 텍스트를 가능한 그대로 추출해줘(줄바꿈 유지).",
+    "summary": "이 문서/사진의 핵심을 한국어 3~5문장으로 요약해줘.",
+    "translate": "사진 속 텍스트를 {lang}(으)로 번역해줘. 원문 의미와 숫자를 유지.",
+    "solve": "이 숙제/문제를 단계별로 풀어주고, 답을 한국어로 짧게 설명해줘.",
+    "table": "표/회계/영수증이면 항목을 Markdown 표로 추출해줘.",
+}
+
 
 def _cfg():
     return (os.getenv("AUTORCODE_VISION_BASE_URL", BASE_URL).rstrip("/"),
@@ -38,6 +46,14 @@ def _post(url: str, payload: dict, key: str, timeout: int):
                                  headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def question_for(task: str, lang: str = "한국어") -> str:
+    t = (task or "text").strip().lower()
+    if t not in TASKS:
+        return ""
+    q = TASKS[t]
+    return q.replace("{lang}", (lang or "한국어").strip()) if "{lang}" in q else q
 
 
 def describe(path: str, question: str = "", timeout: int = 90) -> str:

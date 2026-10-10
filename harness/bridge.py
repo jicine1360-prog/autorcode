@@ -93,7 +93,8 @@ ALLOW_LIST = {"web_search", "web_fetch", "youtube", "read_file", "list_dir",
               "geo_geocode", "geo_nearby", "geo_route",
               "schedule_add", "schedule_list", "schedule_remove",
               "study_save", "study_recall",
-              "goal_add", "goal_list", "goal_step", "goal_remove"}
+              "goal_add", "goal_list", "goal_step", "goal_remove",
+              "photo_doc", "set_language"}
 
 
 class Handler(BaseHTTPRequestHandler):
