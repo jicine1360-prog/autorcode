@@ -224,6 +224,22 @@ class BuildBotTest(unittest.TestCase):
                 else:
                     os.environ[k] = v
 
+    def test_env_chats_family_comma_list(self):
+        import os
+        old = {k: os.environ.get(k) for k in ("AGENTUPBOT_TOKEN", "AGENTUPBOT_CHAT")}
+        os.environ["AGENTUPBOT_TOKEN"] = "778:ENV"
+        os.environ["AGENTUPBOT_CHAT"] = "50735853,35121483,141929293,433885660"
+        try:
+            b = bot.build_bot()
+            self.assertIsNotNone(b)
+            self.assertEqual(set(b._allowed), {50735853, 35121483, 141929293, 433885660})
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
 
 if __name__ == "__main__":
     unittest.main()

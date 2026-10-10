@@ -175,10 +175,14 @@ openclaw 등이 같은 토큰을 폴링 중이면(기사에 나온 그 openclaw!
 ```bash
 cat > ~/.autorcode/bot.env <<'EOF'
 AGENTUPBOT_TOKEN=999999999:AA...        # @BotFather 발급 전용 토큰
-AGENTUPBOT_CHAT=123456789               # 대화방 id
+AGENTUPBOT_CHAT=123456789,234567890     # 가족 여러 명은 쉼표로 (리더 먼저)
 EOF
 chmod 600 ~/.autorcode/bot.env
 ```
+
+   `AGENTUPBOT_CHAT` 은 단일 또는 쉼표 구분 목록을 받는다. `AGENTUPBOT_CHATS` 를
+   쓰면 같은 동작. **봇과 대화를 시작한 사람만** 목록에 의미가 있다(안 한 chat 으로는
+   Telegram 이 sendMessage 를 'chat not found' 로 거부한다 — 각자 봇에 첫 말부터).
 
    (파일 대신 `~/.autorcode/bot.json` 의 `token`/`chat`/`allowedChatIds` 로도 된다)
 

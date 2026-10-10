@@ -236,16 +236,20 @@ def _env_token() -> Optional[str]:
             or os.environ.get("AUTORCODE_BOT_TOKEN") or "").strip() or None
 
 
-def _env_chat() -> Optional[int]:
-    v = (os.environ.get("AGENTUPBOT_CHAT")
-         or os.environ.get("AUTORCODE_BOT_CHAT") or "").strip()
-    if not v:
-        return None
-    try:
-        return int(v)
-    except ValueError:
-        log.warning("잘못된 chat id 환경변수: %r (숫자 아님)", v)
-        return None
+def _env_chats() -> Optional[list[int]]:
+    """환경변수 허용 chat 목록. 단일 또는 쉼표/공백 구분 여러 명(가족).
+
+    AGENTUPBOT_CHATS 를 우선하고, 없으면 AGENTUPBOT_CHAT 을 쓴다.
+    """
+    raw = (os.environ.get("AGENTUPBOT_CHATS")
+           or os.environ.get("AGENTUPBOT_CHAT") or "").strip()
+    chats: list[int] = []
+    for part in raw.replace(",", " ").split():
+        try:
+            chats.append(int(part))
+        except ValueError:
+            log.warning("무시된 chat id: %r (숫자 아님)", part)
+    return chats or None
 
 
 def build_bot(path: Optional[str] = None, **kw) -> Optional[Bot]:
@@ -264,20 +268,20 @@ def build_bot(path: Optional[str] = None, **kw) -> Optional[Bot]:
     """
     token = _env_token()
     if token is not None:
-        chat = _env_chat()
-        if chat is None:
-            # telegram.json 은 같은 사람의 chat 이 담겨 있을 수 있다 → 재사용
+        chats = _env_chats()
+        if not chats:
+            # telegram.json 은 같은 사람의 chat 목록이 담겨 있을 수 있다 → 재사용
             try:
-                chat = load_config(CONFIG_PATH)["allowed"][0]
+                chats = load_config(CONFIG_PATH)["allowed"]
             except Exception:
-                chat = None
-        if chat is None:
+                chats = []
+        if not chats:
             log.warning("AGENTUPBOT_TOKEN 은 있지만 chat id 를 모릅니다 — "
-                        "AGENTUPBOT_CHAT 을 설정하세요")
+                        "AGENTUPBOT_CHATS(또는 CHAT) 를 설정하세요")
             return None
-        gate = ApprovalGate(token, [chat], timeout=DEFAULT_TIMEOUT)
-        log.info("봇 토큰: 환경변수 (AGENTUPBOT_TOKEN)")
-        return Bot(token, [chat], gate=gate, **kw)
+        gate = ApprovalGate(token, chats, timeout=DEFAULT_TIMEOUT)
+        log.info("봇 토큰: 환경변수 (AGENTUPBOT_TOKEN, 허용 %d명)", len(chats))
+        return Bot(token, chats, gate=gate, **kw)
 
     if path is None:
         path = BOT_CONFIG if os.path.exists(BOT_CONFIG) else CONFIG_PATH
