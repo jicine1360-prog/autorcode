@@ -242,7 +242,48 @@ class BuildBotTest(unittest.TestCase):
                     os.environ[k] = v
 
 
-class NotesMemoryTest(unittest.TestCase):
+class ScheduleStoreTest(unittest.TestCase):
+    def test_add_list_remove_per_chat(self):
+        import tempfile
+        from harness import schedule
+        root = tempfile.mkdtemp()
+        with schedule.scope("111"):
+            schedule.add("치과 예약", "2026-10-11T09:30:00", root=root)
+            schedule.add("프로젝트 회의", "2026-10-11T14:00:00", "2026-10-11T15:00:00", root=root)
+            out = schedule.list_events(start="2026-10-11T00:00:00",
+                                       end="2026-10-12T00:00:00", root=root)
+        self.assertIn("치과 예약", out)
+        self.assertIn("프로젝트 회의", out)
+        self.assertIn("10월 11일 14:00 ~ 15:00", out)
+
+        with schedule.scope("222"):
+            mine = schedule.list_events(start="2026-10-11T00:00:00",
+                                        end="2026-10-12T00:00:00", root=root)
+            self.assertNotIn("치과", mine)  # 폰별 분리
+
+        with schedule.scope("111"):
+            rows = os.listdir(os.path.join(root, "schedule"))
+            key_file = os.path.join(root, "schedule", "111.json")
+            key = json.load(open(key_file, encoding="utf-8"))[0]["key"]
+            schedule.remove(key, root=root)
+            self.assertNotIn("치과", schedule.list_events(
+                start="2026-10-11T00:00:00", end="2026-10-12T00:00:00", root=root))
+
+    def test_scan_due_sends_once(self):
+        import tempfile
+        from datetime import datetime, timedelta
+        from harness import schedule
+        root = tempfile.mkdtemp()
+        soon = (schedule.now_seoul() + timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%S")
+        later = (schedule.now_seoul() + timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S")
+        with schedule.scope("111"):
+            schedule.add("곧 시작할 일", soon, root=root)
+            schedule.add("먼 미래 일정", later, root=root)
+        due = schedule.scan_due(root)
+        self.assertEqual(len(due), 1)
+        self.assertEqual(due[0][0], 111)
+        self.assertIn("곧 시작할 일", due[0][1])
+        self.assertEqual(schedule.scan_due(root), [])  # 다시는 없음
     def test_phone_memory_isolated_per_chat(self):
         import tempfile
         from harness import notes

@@ -217,6 +217,10 @@ systemctl --user enable --now autorcode-bot
 **폰(chat)별로 분리**된다 — 각자의 "기억해"(`~/.autorcode/memory.txt.<chat>`)와
 이야기 맥락(`session_<chat>.jsonl`)이 서로 안 섞인다.
 
+**스케줄**: "내일 9시 미팅 잡아줘" / "오늘 일정 알려줘" / "그거 지워줘" 를 자연어로
+받아 폰별 일정(`<workspace>/schedule/<chat>.json`)에 저장·조회·삭제하고, 시작
+**5분 전부터** 봇이 먼저 알림을 보낸다(`⏰ 일정: …`). 시간 해석/표시는 서울(KST).
+
 ## GPU 없이 사용하기 (OpenRouter)
 ollama 대신 클라우드 API로 같은 에이전트 호출 — 모델명에 `/`를 넣으면 자동 라우팅됩니다.
 ```bash

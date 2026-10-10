@@ -10,7 +10,7 @@ import sys
 import time
 from typing import Callable, Dict
 
-from . import notes, safety, webtools
+from . import notes, safety, schedule, webtools
 
 log = logging.getLogger("agent.tools")
 
@@ -351,6 +351,19 @@ def _forget(_args, root, max_output, timeout):
     return notes.clear()
 
 
+def _schedule_add(args, root, max_output, timeout):
+    return schedule.add(args.get("title") or "", args.get("start"),
+                        args.get("end"), args.get("note") or "", root)
+
+
+def _schedule_list(args, root, max_output, timeout):
+    return schedule.list_events(args.get("start"), args.get("end"), root)
+
+
+def _schedule_remove(args, root, max_output, timeout):
+    return schedule.remove(args.get("key") or "", root)
+
+
 # ---------------- 엑셀 (openpyxl) ----------------
 
 def _excel_summary(args, root, max_output, timeout):
@@ -652,6 +665,9 @@ TOOLS: Dict[str, ToolFn] = {
     "remember": _remember,
     "recall": _recall,
     "forget": _forget,
+    "schedule_add": _schedule_add,
+    "schedule_list": _schedule_list,
+    "schedule_remove": _schedule_remove,
     **webtools.TOOLS,
 }
 
@@ -674,6 +690,9 @@ SCHEMAS = {
     "image_ocr": "args: {path:str, lang?:str(kor+eng)} — 사진/스캔 이미지를 OCR로 텍스트화",
     "remember": "args: {fact:str, max_len?:int} — 서버 파악 사실뿐 아니라 '엄마 생일 3월 3일' 같은 개인 사실도 기억에 저장 (폰별 분리, 재방문 방지)",
     "recall": "args: {} — 지금까지 기억한 사실 목록 조회 (이 사람 전용)",
+    "schedule_add": "args: {title:str, start:str, end?:str, note?:str} — 일정 저장. start/end 는 서울시간(KST, UTC+9) ISO8601 (예: 2026-10-10T18:00:00). 빈 자리는 첫 표시 시각으로 잡는다.",
+    "schedule_list": "args: {start?:str, end?:str} — 일정 조회. 범위 없으면 오늘 하루 (내일은 '2026-10-11T00:00' 처럼 start 지정)",
+    "schedule_remove": "args: {key:str} — schedule_list 결과의 key 로 일정 삭제",
     "forget": "args: {} — 기억 전체 삭제",
     **webtools.SCHEMAS,
 }

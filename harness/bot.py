@@ -20,6 +20,7 @@ import threading
 import urllib.request
 from typing import Callable, Optional
 
+from . import schedule as sched
 from .agent_core import Agent
 from .approve import ApprovalGate, DEFAULT_TIMEOUT, GateUnavailable, load_config
 from .config import Config, load as load_config_env
@@ -115,6 +116,7 @@ class Bot:
             return
         self._thread = threading.Thread(target=self._poll, name="tg-bot", daemon=True)
         self._thread.start()
+        threading.Thread(target=self._sched_loop, name="tg-sched", daemon=True).start()
 
     def stop(self) -> None:
         self._stop.set()
@@ -191,18 +193,31 @@ class Bot:
             self._busy = True
         threading.Thread(target=self._work, args=(chat_id, text), daemon=True, name="tg-task").start()
 
+    # -- 스케줄 알림 --------------------------------------------------------
+
+    def _sched_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                for chat_id, text in sched.scan_due(self._workspace):
+                    self.send(chat_id, f"⏰ 일정: {text}")
+            except Exception:
+                log.exception("스케줄 알림 오류")
+            self._stop.wait(20)
+
     # -- 작업 --------------------------------------------------------------
 
     def _work(self, chat_id: int, text: str) -> None:
         try:
-            with mem_scope(str(chat_id)):
+            with mem_scope(str(chat_id)), sched.scope(str(chat_id)):
                 if self._gate is not None:
                     self._gate.current_chat = chat_id
                 agent = self._agent_factory() if self._agent_factory else self._default_agent()
                 mem = load_for(str(chat_id))
-                task = text
+                now = sched.now_seoul().strftime("%Y-%m-%d %H:%M (%A)")
+                front = [f"[현재 시각(서울)] {now}"]
                 if mem:
-                    task = f"[{chat_id} 사용자에 대해 기억하고 있는 것]\n{mem}\n---\n새 요청: {text}"
+                    front.append(f"[{chat_id} 사용자에게 기억하고 있는 것]\n{mem}")
+                task = "\n\n".join(front) + "\n---\n새 요청: " + text
                 self.send(chat_id, f"작업 시작 🛠 ({len(text)}자)\n승인이 필요하면 버튼이 올라옵니다.")
                 result = agent.run(task)
                 self.send(chat_id, result)
