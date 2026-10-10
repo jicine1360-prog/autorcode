@@ -12,6 +12,7 @@ from typing import Callable, Dict
 
 from . import notes, safety, schedule, webtools
 from . import geo
+from . import study
 
 log = logging.getLogger("agent.tools")
 
@@ -365,6 +366,14 @@ def _schedule_remove(args, root, max_output, timeout):
     return schedule.remove(args.get("key") or "", root)
 
 
+def _study_save(args, root, max_output, timeout):
+    return study.save(notes.chat(), args.get("topic") or "", args.get("content") or "")
+
+
+def _study_recall(args, root, max_output, timeout):
+    return study.recall(notes.chat(), args.get("topic") or None)
+
+
 def _geo_geocode(args, root, max_output, timeout):
     got = geo.geocode(args.get("query") or "")
     if not got:
@@ -687,6 +696,8 @@ TOOLS: Dict[str, ToolFn] = {
     "schedule_add": _schedule_add,
     "schedule_list": _schedule_list,
     "schedule_remove": _schedule_remove,
+    "study_save": _study_save,
+    "study_recall": _study_recall,
     "geo_geocode": _geo_geocode,
     "geo_nearby": _geo_nearby,
     "geo_route": _geo_route,
@@ -715,6 +726,8 @@ SCHEMAS = {
     "schedule_add": "args: {title:str, start:str, end?:str, note?:str} — 일정 저장. start/end 는 서울시간(KST, UTC+9) ISO8601 (예: 2026-10-10T18:00:00). 빈 자리는 첫 표시 시각으로 잡는다.",
     "schedule_list": "args: {start?:str, end?:str} — 일정 조회. 범위 없으면 오늘 하루 (내일은 '2026-10-11T00:00' 처럼 start 지정)",
     "schedule_remove": "args: {key:str} — schedule_list 결과의 key 로 일정 삭제",
+    "study_save": "args: {topic:str, content:str} — '미리 공부해놔' 요청용. web_search/web_fetch 로 조사한 핵심 정리를 주제별로 저장(폰별). 같은 주제는 대체된다.",
+    "study_recall": "args: {topic?:str} — 저장된 학습 자료를 꺼낸다. topic 없으면 전부, 있으면 그 주제만.",
     "geo_geocode": "args: {query:str} — 주소/장소명 → 위경도+주소 (예: '서울역', '광화문 세종로 1')",
     "geo_nearby": "args: {kind:str, lat?:float, lon?:float, place?:str, radius?:m, limit?:n} — 반경 내 장소 목록. kind: 맛집/카페/관공서/병원/약국/은행/주유소/편의점/주차/역/공원. lat/lon 이 없으면 place 로 찾는다.",
     "geo_route": "args: {from:str, to:str} — 장소명 또는 '위도,경도' 두 지점 자동차 경로(거리·시간·주요구간)",

@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Optional
 
 log = logging.getLogger("agent.geo")
 
@@ -105,6 +106,24 @@ def geocode(query: str, timeout: int = 30):
         return None
     return {"lat": float(data[0]["lat"]), "lon": float(data[0]["lon"]),
             "name": data[0].get("display_name", "")}
+
+
+def reverse(lat: float, lon: float, timeout: int = 10) -> Optional[str]:
+    """좌표 → 사람이 읽는 주소(한국어). 실패하면 None."""
+    url = (f"{NOMINATIM}/reverse?format=jsonv2&accept-language=ko&lat={lat}&lon={lon}")
+    try:
+        row = _get(url, timeout)
+    except Exception as e:
+        log.warning("역지오코딩 실패: %s", e)
+        return None
+    name = ((row or {}).get("display_name") or "").strip()
+    if not name:
+        return None
+    parts = [p.strip() for p in reversed(name.split(",")) if p.strip()]
+    if parts and parts[0].lower() in {"대한민국", "한국", "south korea",
+                                      "republic of korea", "korea"}:
+        parts = parts[1:]
+    return " ".join(parts[:3]) if parts else name
 
 
 def _hav(lat1, lon1, lat2, lon2) -> int:

@@ -20,7 +20,9 @@ import threading
 import urllib.request
 from typing import Callable, Optional
 
+from . import location as loc
 from . import schedule as sched
+from . import study
 from .agent_core import Agent
 from .approve import ApprovalGate, DEFAULT_TIMEOUT, GateUnavailable, load_config
 from .config import Config, load as load_config_env
@@ -43,8 +45,12 @@ HELP = (
     "/report  일일 리포트 전송\n"
     "/help    이 도움말\n\n"
     "민감한 명령은 여기서 승인/거부 버튼을 눌러 결정하고,\n"
-    "거부하면 실행되지 않습니다."
+    "거부하면 실행되지 않습니다.\n\n"
+    "'근처/주변'은 내 위치 기준으로 알려드려요.\n"
+    "'위치'라고 보내시면 공유 버튼이 올라옵니다."
 )
+_LOC_WORDS = ("위치", "gps", "좌표", "지금 있는 곳")
+_LOC_NEAR_WORDS = ("근처", "주변", "가까운")
 
 
 def _default_workspace() -> str:
@@ -78,6 +84,7 @@ class Bot:
         self._offset: Optional[int] = None
         self._busy = False
         self._lock = threading.Lock()
+        self._pending: dict[str, str] = {}
 
     # -- Telegram API ------------------------------------------------------
 
@@ -96,14 +103,17 @@ class Bot:
             raise RuntimeError(f"{code}:{desc}")
         return body.get("result")
 
-    def send(self, chat_id: int, text: str) -> bool:
+    def send(self, chat_id: int, text: str, reply_markup=None) -> bool:
         """회신. 실패해도 폴러를 죽이지 않는다(가급적 로그만 남긴다)."""
         try:
-            self._call("sendMessage", {
+            payload = {
                 "chat_id": chat_id,
                 "text": text[:_TEXT_LIMIT],
                 "disable_web_page_preview": True,
-            })
+            }
+            if reply_markup is not None:
+                payload["reply_markup"] = reply_markup
+            self._call("sendMessage", payload)
             return True
         except Exception as e:
             log.warning("전송 실패 (chat %s): %s", chat_id, e)
@@ -167,11 +177,17 @@ class Bot:
         if not m:
             return
         chat_id = int(((m.get("chat") or {}).get("id") or 0))
-        text = str(m.get("text") or "").strip()
-        if not text or chat_id <= 0:
+        if chat_id <= 0:
             return
         if chat_id not in self._allowed:
             log.warning("허용되지 않은 chat(%s) 의 메시지 무시", chat_id)
+            return
+        if m.get("location"):
+            threading.Thread(target=self._on_location,
+                             args=(chat_id, m["location"]), daemon=True).start()
+            return
+        text = str(m.get("text") or "").strip()
+        if not text:
             return
         self._handle(chat_id, text)
 
@@ -186,12 +202,49 @@ class Bot:
             self.send(chat_id, collect_status())
             return
 
+        if loc.load(chat_id) is None and self._loc_intent(text):
+            self._pending[str(chat_id)] = text
+            self._ask_location(chat_id)
+            return
+
         with self._lock:
             if self._busy:
                 self.send(chat_id, "이미 작업 중입니다. 하나씩만 받을 수 있어요 — 끝나면 다시 보내주세요.")
                 return
             self._busy = True
         threading.Thread(target=self._work, args=(chat_id, text), daemon=True, name="tg-task").start()
+
+    @staticmethod
+    def _loc_intent(text: str) -> bool:
+        low = text.lower()
+        return (any(w in low for w in _LOC_WORDS)
+                or any(w in text for w in _LOC_NEAR_WORDS))
+
+    def _ask_location(self, chat_id: int) -> None:
+        """위치 미등록 상태인데 위치가 필요한 요청 → 공유 버튼을 띄운다."""
+        markup = {
+            "keyboard": [[{"text": "📍 현재 위치 보내기", "request_location": True}]],
+            "one_time_keyboard": True,
+            "resize_keyboard": True,
+        }
+        self.send(chat_id, "현재 위치를 등록하면 '근처/주변'이 그 기준으로 동작해요.\n아래 버튼을 눌러 위치를 보내주세요.", markup)
+
+    def _on_location(self, chat_id: int, m: dict) -> None:
+        """사용자가 공유한 위치 저장 — 역지오코딩 후 안내, 대기 중인 질문이 있으면 실행."""
+        try:
+            lat = float(m.get("latitude") or 0)
+            lon = float(m.get("longitude") or 0)
+            if not lat and not lon:
+                return
+            rec = loc.store(chat_id, lat, lon)
+            where = rec["name"] or f"{lat:.5f}, {lon:.5f}"
+            queued = self._pending.pop(str(chat_id), None)
+            tail = "\n받아둔 질문을 이 위치 기준으로 실행할게요." if queued else ""
+            self.send(chat_id, f"📍 위치 저장: {where}{tail}")
+            if queued:
+                self._handle(chat_id, queued)
+        except Exception as e:
+            log.exception("위치 저장 실패 (chat %s)", chat_id)
 
     # -- 스케줄 알림 --------------------------------------------------------
 
@@ -215,8 +268,14 @@ class Bot:
                 mem = load_for(str(chat_id))
                 now = sched.now_seoul().strftime("%Y-%m-%d %H:%M (%A)")
                 front = [f"[현재 시각(서울)] {now}"]
+                maybe_loc = loc.describe(chat_id)
+                if maybe_loc:
+                    front.append(f"[이 사용자의 최근 위치]\n{maybe_loc}")
                 if mem:
                     front.append(f"[{chat_id} 사용자에게 기억하고 있는 것]\n{mem}")
+                hint = study.hint(str(chat_id))
+                if hint:
+                    front.append(hint)
                 task = "\n\n".join(front) + "\n---\n새 요청: " + text
                 self.send(chat_id, f"작업 시작 🛠 ({len(text)}자)\n승인이 필요하면 버튼이 올라옵니다.")
                 result = agent.run(task)
