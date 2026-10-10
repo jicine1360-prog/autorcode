@@ -27,6 +27,7 @@ from . import location as loc
 from . import profile
 from . import schedule as sched
 from . import study
+from .voice import transcribe as voice_transcribe
 from .agent_core import Agent
 from .approve import ApprovalGate, DEFAULT_TIMEOUT, GateUnavailable, load_config
 from .config import Config, load as load_config_env
@@ -54,6 +55,7 @@ HELP = (
     "'위치'라고 보내시면 공유 버튼이 올라옵니다.\n"
     "'이번 달 ~~가 목표야' 라고 하면 장기 목표로 등록하고 주기적으로 점검해요.\n"
     "사진을 보내면(설명 첨부 가능) 로컬 VLM 으로 내용·텍스트를 읽어줘요.\n"
+    "음성 메모도 들어요 — 말하면 로컬 whisper 로 받아적어서 실행해요.\n"
     "답변/번역 언어는 폰별 설정 — '언어를 영어로 해줘' 로 바꿀 수 있어요."
 )
 _LOC_WORDS = ("위치", "gps", "좌표", "지금 있는 곳")
@@ -198,21 +200,24 @@ class Bot:
             threading.Thread(target=self._on_photo,
                              args=(chat_id, m, caption), daemon=True).start()
             return
+        voice = m.get("voice") or m.get("audio")
+        if voice:
+            threading.Thread(target=self._on_voice,
+                             args=(chat_id, voice, caption), daemon=True).start()
+            return
         text = str(m.get("text") or "").strip()
         if not text:
             return
         self._handle(chat_id, text)
 
-    # -- 사진 --------------------------------------------------------------
+    # -- 미디어(사진/음성) 다운로드 ------------------------------------------
 
-    def _photo_path(self, chat_id: int, m: dict) -> Optional[str]:
-        """ 텔레그램 사진(가장 큰 크기)을 워크스페이스 inbox 에 저장 → 경로(또는 None)."""
-        photos = m.get("photo") or []
-        if not photos:
+    def _save_remote(self, chat_id: int, file_id: str, prefix: str = "inbox") -> Optional[str]:
+        """getFile → 다운로드 → 워크스페이스 저장. 실패 시 None."""
+        if not file_id:
             return None
-        best = max(photos, key=lambda p: int(p.get("file_size") or 0))
         try:
-            info = self._call("getFile", {"file_id": best.get("file_id")}) or {}
+            info = self._call("getFile", {"file_id": file_id}) or {}
             remote = str(info.get("file_path") or "")
             if not remote:
                 log.warning("getFile 에 file_path 없음 (chat %s)", chat_id)
@@ -221,14 +226,22 @@ class Bot:
             with self._opener(urllib.request.Request(url), timeout=60) as r:
                 data = r.read()
             ext = os.path.splitext(remote)[1] or ".jpg"
-            name = f"inbox_{chat_id}_{int(time.time())}{ext}"
+            name = f"{prefix}_{chat_id}_{int(time.time())}{ext}"
             path = os.path.join(self._workspace, name)
             with open(path, "wb") as f:
                 f.write(data)
             return path
         except Exception as e:
-            log.warning("사진 저장 실패(chat %s): %s", chat_id, e)
+            log.warning("미디어 저장 실패(chat %s): %s", chat_id, e)
             return None
+
+    def _photo_path(self, chat_id: int, m: dict) -> Optional[str]:
+        """텔레그램 사진(가장 큰 크기)을 워크스페이스 inbox 에 저장 → 경로(또는 None)."""
+        photos = m.get("photo") or []
+        if not photos:
+            return None
+        best = max(photos, key=lambda p: int(p.get("file_size") or 0))
+        return self._save_remote(chat_id, str(best.get("file_id") or ""), "inbox")
 
     def _on_photo(self, chat_id: int, m: dict, caption: str) -> None:
         path = self._photo_path(chat_id, m)
@@ -240,6 +253,23 @@ class Bot:
         q = caption or (f"사진 속 문자를 읽어줘. 읽은 언어가 {lang}이 아니면 "
                         f"{lang}(으)로 번역해서 원문과 함께 보여줘")
         self._handle(chat_id, f"[사진 도착] 파일: {rel}\n요청: {q}")
+
+    def _on_voice(self, chat_id: int, voice: dict, caption: str) -> None:
+        """음성 메모 → 로컬 whisper STT → 텍스트로 작업 실행."""
+        path = self._save_remote(chat_id, str(voice.get("file_id") or ""), "voice")
+        if not path:
+            self.send(chat_id, "음성을 받았는데 저장에 실패했어요. 다시 시도 부탁해요.")
+            return
+        self.send(chat_id, "🎙 음성 인식 중…")
+        text = voice_transcribe(path)
+        if text.startswith("[오류]"):
+            self.send(chat_id, text + "\n(음성 대신 텍스트로 보내주시면 바로 처리할게요)")
+            return
+        if not text:
+            self.send(chat_id, "음성을 들었는데 내용이 안 들려요. 크게 다시 한 번?")
+            return
+        req = f"{text}\n{caption}".strip() if caption else text
+        self._handle(chat_id, req)
 
     # -- 명령 --------------------------------------------------------------
 

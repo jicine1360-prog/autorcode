@@ -245,8 +245,7 @@ systemctl --user enable --now autorcode-bot
 (`~/.autorcode/goals.json.<chat>`)로 등록하면 단계별 진행(`goal_step`)을 관리하고,
 하루에 한 번 봇이 `🎯 목표 점검: …` 로 먼저 말을 건다(Muse/Dots 식 능동 에이전트).
 
-**사진 이해(VLM)**: 폰에서 사진을 보내면 워크스페이스 `inbox_*` 파일로 저장하고
-로컬 VLM(`qwen2.5vl:3b`, 기본)으로 내용/텍스트를 읽어 답한다(OCR(tesseract) 병용).
+**사진 이해(VLM)**: 폰에서 사진을 보내면 워크스페이스 `inbox_*` 파일로 저장하고로컬 VLM(`qwen2.5vl:3b`, 기본)으로 내용/텍스트를 읽어 답한다(OCR(tesseract) 병용).
 사진은 기본 설정에서 밖으로 안 나간다. 클라우드 VLM 쓰려면
 `AUTORCODE_VISION_BASE_URL`/`AUTORCODE_VISION_MODEL`/`AUTORCODE_VISION_KEY` 지정.
 
@@ -254,6 +253,11 @@ systemctl --user enable --now autorcode-bot
 으로 사진 속 글자를 추출/번역/요약/풀이한다. 모국어는 **폰별** 저장(`profile.json.<chat>`) —
 "언어를 영어로 해줘" 라고 하면 그 뒤 답변·사진 번역이 영어로 나간다(기본 한국어,
 `AUTORCODE_USER_LANG` 변경 가능). 가족이 각자 다른 언어를 써도 된다.
+
+**음성 메모(STT)**: 폰에서 음성으로 말하면(`voice`/`audio`) `voice_*` 파일로 저장하고
+**로컬 whisper**(openai-whisper CLI, 기본 `base` 모델)로 받아적어 그대로 작업 실행한다 —
+소리가 밖으로 나가지 않는다. `AUTORCODE_WHISPER_BIN`/`AUTORCODE_STT_MODEL`
+(고품질: `large-v3-turbo`)로 조정. 인식 실패하면 텍스트로 다시 보내라고 안내한다.
 
 ## GPU 없이 사용하기 (OpenRouter)
 ollama 대신 클라우드 API로 같은 에이전트 호출 — 모델명에 `/`를 넣으면 자동 라우팅됩니다.
