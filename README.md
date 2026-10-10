@@ -170,12 +170,17 @@ openclaw 등이 같은 토큰을 폴링 중이면(기사에 나온 그 openclaw!
 
 1. 텔레그램에서 `@BotFather` → `/newbot` → 이름/봇 계정 입력 → 토큰 발급
 2. 봇에게 대화 한 번 보내고, `@userinfobot`(또는 봇의 메시지에서) 자기 chat id 확인
-3. `~/.autorcode/bot.json` 작성 후 `chmod 600`:
+3. 토큰을 환경변수로 넘긴다(권장 — git/유닛 파일 어디에도 안 남는다):
 
-```json
-{ "token": "999999999:AA...", "chat": 123456789,
-  "allowedChatIds": [123456789], "approveTimeout": 180 }
+```bash
+cat > ~/.autorcode/bot.env <<'EOF'
+AGENTUPBOT_TOKEN=999999999:AA...        # @BotFather 발급 전용 토큰
+AGENTUPBOT_CHAT=123456789               # 대화방 id
+EOF
+chmod 600 ~/.autorcode/bot.env
 ```
+
+   (파일 대신 `~/.autorcode/bot.json` 의 `token`/`chat`/`allowedChatIds` 로도 된다)
 
 4. 상시 실행(사용자 systemd):
 
@@ -190,6 +195,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h
+EnvironmentFile=-%h/.autorcode/bot.env
 Environment=AGENT_PROVIDER=ollama
 ExecStart=%h/.local/bin/autorcode bot --verbose
 Restart=on-failure

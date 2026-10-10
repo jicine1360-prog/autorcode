@@ -472,9 +472,9 @@ def cmd_bot(args) -> int:
             from harness.bot import Bot
             b = Bot(token, [int(chat)])
         else:
-            print("[오류] 폰 비서 설정이 없습니다: ~/.autorcode/bot.json "
-                  "(token + allowedChatIds, 전용 토큰 권장) 또는 기존 ~/.autorcode/telegram.json",
-                  file=sys.stderr)
+            print("[오류] 폰 비서 설정이 없습니다. 환경변수 AGENTUPBOT_TOKEN(+AGENTUPBOT_CHAT) "
+                  "또는 ~/.autorcode/bot.json (token + allowedChatIds) "
+                  "또는 기존 ~/.autorcode/telegram.json", file=sys.stderr)
             return 1
     b.start()
     print(f"[봇] 폴러 시작 — 허용 {len(b._allowed)}명 · Ctrl+C 로 종료", file=sys.stderr)
@@ -529,7 +529,7 @@ def main() -> int:
     p = sub.add_parser("report", help="서버 상태 리포트 — 텔레그램 전송(토큰 있으면) 또는 stdout")
     p.set_defaults(fn=cmd_report)
     p = sub.add_parser("bot", help="폰 비서 — 텔레그램 폴러(명령+승인) 실행")
-    p.add_argument("--token", default=None, help="수신용 봇 토큰 (기본: ~/.autorcode/bot.json → telegram.json)")
+    p.add_argument("--token", default=None, help="수신용 봇 토큰 (기본: AGENTUPBOT_TOKEN env → ~/.autorcode/bot.json → telegram.json)")
     p.add_argument("--chat", default=None, help="허용 chat id (토큰 직접 지정 시 필수)")
     p.add_argument("--verbose", action="store_true", help="진단 로그 출력")
     p.set_defaults(fn=cmd_bot)

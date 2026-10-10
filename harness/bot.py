@@ -21,7 +21,7 @@ import urllib.request
 from typing import Callable, Optional
 
 from .agent_core import Agent
-from .approve import ApprovalGate, GateUnavailable, load_config
+from .approve import ApprovalGate, DEFAULT_TIMEOUT, GateUnavailable, load_config
 from .config import Config, load as load_config_env
 from .progress import Progress
 from .telegram import CONFIG_PATH, collect_status
@@ -227,16 +227,58 @@ class Bot:
         return Agent(cfg, confirmer=self._gate, progress=Progress(enabled=False))
 
 
+def _env_token() -> Optional[str]:
+    """환경변수 봇 토큰. AGENTUPBOT_TOKEN 또는 AUTORCODE_BOT_TOKEN.
+
+    토큰을 git 에 두지 않고(공개 repo) env/EnvironmentFile 로 넘기는 흐름.
+    """
+    return (os.environ.get("AGENTUPBOT_TOKEN")
+            or os.environ.get("AUTORCODE_BOT_TOKEN") or "").strip() or None
+
+
+def _env_chat() -> Optional[int]:
+    v = (os.environ.get("AGENTUPBOT_CHAT")
+         or os.environ.get("AUTORCODE_BOT_CHAT") or "").strip()
+    if not v:
+        return None
+    try:
+        return int(v)
+    except ValueError:
+        log.warning("잘못된 chat id 환경변수: %r (숫자 아님)", v)
+        return None
+
+
 def build_bot(path: Optional[str] = None, **kw) -> Optional[Bot]:
     """설정에서 봇을 만든다. 구성 문제가 있으면 None(fail-closed).
 
-    기본 설정은 ~/.autorcode/bot.json (전용 토큰). 없으면 예전 호환으로
-    telegram.json 을 쓴다 — 단, 그 토큰을 openclaw 등이 폴링 중이면 409 로
-    포기한다(사용자에게 새 봇을 만들라고 안내).
+    우선순위:
+      1. env AGENTUPBOT_TOKEN(/AUTORCODE_BOT_TOKEN) — 토큰을 git/파일 대신
+         환경변수(EnvironmentFile 등)로 넘기는 흐름. chat 은 AGENTUPBOT_CHAT,
+         없으면 기존 telegram.json 의 chat 을 재사용.
+      2. ~/.autorcode/bot.json (전용 토큰)
+      3. 예전 호환 telegram.json — 단, 그 토큰을 openclaw 등이 폴링 중이면
+         409 로 포기한다(사용자에게 새 봇을 만들라고 안내).
 
     게이트가 직접 폴링해서는 안 되므로 build_from_config 를 쓰지 않고,
     로딩은 load_config 로, 게이트는 폴링 없이 손수 만든다. 폴러는 Bot 이 소유한다.
     """
+    token = _env_token()
+    if token is not None:
+        chat = _env_chat()
+        if chat is None:
+            # telegram.json 은 같은 사람의 chat 이 담겨 있을 수 있다 → 재사용
+            try:
+                chat = load_config(CONFIG_PATH)["allowed"][0]
+            except Exception:
+                chat = None
+        if chat is None:
+            log.warning("AGENTUPBOT_TOKEN 은 있지만 chat id 를 모릅니다 — "
+                        "AGENTUPBOT_CHAT 을 설정하세요")
+            return None
+        gate = ApprovalGate(token, [chat], timeout=DEFAULT_TIMEOUT)
+        log.info("봇 토큰: 환경변수 (AGENTUPBOT_TOKEN)")
+        return Bot(token, [chat], gate=gate, **kw)
+
     if path is None:
         path = BOT_CONFIG if os.path.exists(BOT_CONFIG) else CONFIG_PATH
     if not os.path.exists(path):

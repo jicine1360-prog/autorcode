@@ -207,6 +207,23 @@ class BuildBotTest(unittest.TestCase):
             finally:
                 bot.BOT_CONFIG = old
 
+    def test_env_token_preferred(self):
+        import os
+        old = {k: os.environ.get(k) for k in ("AGENTUPBOT_TOKEN", "AGENTUPBOT_CHAT")}
+        os.environ["AGENTUPBOT_TOKEN"] = "777:ENV"
+        os.environ["AGENTUPBOT_CHAT"] = "50735853"
+        try:
+            b = bot.build_bot()
+            self.assertIsNotNone(b)
+            self.assertEqual(b._token, "777:ENV")
+            self.assertEqual(list(b._allowed), [50735853])
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
 
 if __name__ == "__main__":
     unittest.main()
