@@ -5,6 +5,7 @@
 (논스 1회용 · 화이트리스트 · chat 일치)을 그대로 쓴다.
 """
 import json
+import os
 import threading
 import time
 import unittest
@@ -239,6 +240,29 @@ class BuildBotTest(unittest.TestCase):
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
+
+
+class NotesMemoryTest(unittest.TestCase):
+    def test_phone_memory_isolated_per_chat(self):
+        import tempfile
+        from harness import notes
+        base = os.path.join(tempfile.mkdtemp(), "memory.txt")
+        with notes.scope("111"):
+            notes.append("엄마 생일 3월 3일", cfg_path=base)
+        with notes.scope("222"):
+            notes.append("아빠는 커피만", cfg_path=base)
+            self.assertNotIn("엄마", notes.load(cfg_path=base))
+            self.assertIn("커피", notes.load(cfg_path=base))
+        with notes.scope("111"):
+            self.assertIn("엄마", notes.load(cfg_path=base))
+            self.assertNotIn("커피", notes.load(cfg_path=base))
+
+    def test_scope_restores_caller_context(self):
+        from harness import notes
+        with notes.scope("789"):
+            with notes.scope("456"):
+                self.assertEqual(notes.chat(), "456")
+            self.assertEqual(notes.chat(), "789")
 
 
 if __name__ == "__main__":

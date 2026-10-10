@@ -672,8 +672,8 @@ SCHEMAS = {
     "excel_write": "args: {path:str, content:str} — Markdown 표를 .xlsx 시트로 저장",
     "pdf_read": "args: {path:str} — PDF를 텍스트로 추출(pdftotext)",
     "image_ocr": "args: {path:str, lang?:str(kor+eng)} — 사진/스캔 이미지를 OCR로 텍스트화",
-    "remember": "args: {fact:str, max_len?:int} — 서버/시스템에서 파악한 사실을 오래 기억에 저장 (재방문 방지)",
-    "recall": "args: {} — 지금까지 기억한 사실 목록 조회",
+    "remember": "args: {fact:str, max_len?:int} — 서버 파악 사실뿐 아니라 '엄마 생일 3월 3일' 같은 개인 사실도 기억에 저장 (폰별 분리, 재방문 방지)",
+    "recall": "args: {} — 지금까지 기억한 사실 목록 조회 (이 사람 전용)",
     "forget": "args: {} — 기억 전체 삭제",
     **webtools.SCHEMAS,
 }

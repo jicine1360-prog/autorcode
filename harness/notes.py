@@ -1,22 +1,58 @@
 """영속 사실 메모리 — 서버/시스템 한번 파악한 사실을 파일에 저장해 두고 재사용.
 
 - 파일 기본 위치: AGENT_MEMORY_FILE (기본 ~/.autorcode/memory.txt)
+- 폰 비서는 사용자(chat)별로 완전 분리: ~/.autorcode/memory.txt.<chat>
+  → 각 폰의 기억은 각자 파일로, 서로 안 섞인다.
 - 맨 앞 줄은 요약(사용자에게 보여줄 사실), 뒤는 상세 기록
 - remember: 사실 추가(같은 내용은 대체), recall: 현재 기억 목록
 """
 import logging
 import os
+import threading
+from contextlib import contextmanager
 
 log = logging.getLogger("agent.notes")
 
 HEADER = "# autorcode 기억 (이전에 파악한 사실)"
 
+_local = threading.local()
+
+
+def chat() -> str:
+    """현재 실행 스레드의 사용자(폰 chat) 구분 값. 없으면 ''(공유 공간)."""
+    return getattr(_local, "chat", "") or ""
+
+
+@contextmanager
+def scope(c: str):
+    """작업 스레드에 사용자 구분을 걸어 그동안 remember/recall 을 그 유저 기억으로."""
+    prev = getattr(_local, "chat", None)
+    _local.chat = str(c)
+    try:
+        yield
+    finally:
+        if prev is None:
+            try:
+                del _local.chat
+            except (AttributeError, KeyError):
+                pass
+        else:
+            _local.chat = prev
+
 
 def _path(cfg_path: str = "") -> str:
-    p = cfg_path or os.getenv("AGENT_MEMORY_FILE", "")
-    if p:
-        return os.path.expanduser(p)
-    return os.path.expanduser("~/.autorcode/memory.txt")
+    c = chat()
+    base = os.path.expanduser(
+        cfg_path or os.getenv("AGENT_MEMORY_FILE", "") or "~/.autorcode/memory.txt")
+    if c:
+        return f"{base}.{c}"
+    return base
+
+
+def load_for(c: str) -> str:
+    """특정 폰(chat)의 기억을 scope 없이 꺼낸다 (AI 에 이전 요청 주입용)."""
+    with scope(c):
+        return load()
 
 
 def load(cfg_path: str = "") -> str:

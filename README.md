@@ -213,8 +213,9 @@ systemctl --user enable --now autorcode-bot
 ```
 
 없으면 `~/.autorcode/telegram.json` 을 호환으로 쓴다(리포트/구승인 게이트 공용 토큰).
-작업 workspace 는 `~/autorcode-bot`(또는 `AUTORCODE_BOT_WORKSPACE`), 세션과 기억은
-그 workspace 기준으로 이어진다.
+작업 workspace 는 `~/autorcode-bot`(또는 `AUTORCODE_BOT_WORKSPACE`), 세션·기억과는
+**폰(chat)별로 분리**된다 — 각자의 "기억해"(`~/.autorcode/memory.txt.<chat>`)와
+이야기 맥락(`session_<chat>.jsonl`)이 서로 안 섞인다.
 
 ## GPU 없이 사용하기 (OpenRouter)
 ollama 대신 클라우드 API로 같은 에이전트 호출 — 모델명에 `/`를 넣으면 자동 라우팅됩니다.

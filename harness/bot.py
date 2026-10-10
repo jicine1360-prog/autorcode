@@ -23,6 +23,8 @@ from typing import Callable, Optional
 from .agent_core import Agent
 from .approve import ApprovalGate, DEFAULT_TIMEOUT, GateUnavailable, load_config
 from .config import Config, load as load_config_env
+from .notes import chat as mem_chat
+from .notes import load_for, scope as mem_scope
 from .progress import Progress
 from .telegram import CONFIG_PATH, collect_status
 
@@ -193,35 +195,39 @@ class Bot:
 
     def _work(self, chat_id: int, text: str) -> None:
         try:
-            if self._gate is not None:
-                self._gate.current_chat = chat_id
-            agent = self._agent_factory() if self._agent_factory else self._default_agent()
-            self.send(chat_id, f"작업 시작 🛠 ({len(text)}자)\n승인이 필요하면 버튼이 올라옵니다.")
-            result = agent.run(text)
-            if self._gate is not None:
-                self._gate.current_chat = None
-            self.send(chat_id, result)
+            with mem_scope(str(chat_id)):
+                if self._gate is not None:
+                    self._gate.current_chat = chat_id
+                agent = self._agent_factory() if self._agent_factory else self._default_agent()
+                mem = load_for(str(chat_id))
+                task = text
+                if mem:
+                    task = f"[{chat_id} 사용자에 대해 기억하고 있는 것]\n{mem}\n---\n새 요청: {text}"
+                self.send(chat_id, f"작업 시작 🛠 ({len(text)}자)\n승인이 필요하면 버튼이 올라옵니다.")
+                result = agent.run(task)
+                self.send(chat_id, result)
         except Exception as e:
             log.exception("작업 실패 (chat %s)", chat_id)
-            if self._gate is not None:
-                self._gate.current_chat = None
             self.send(chat_id, f"작업 중 오류: {str(e)[:_TEXT_LIMIT]}")
         finally:
             with self._lock:
                 self._busy = False
+            if self._gate is not None:
+                self._gate.current_chat = None
 
     def _default_agent(self) -> Agent:
         """전화 작업 기본 에이전트.
 
-        전용 workspace + workspace 기준 세션 파일로 다음 작업 때 이전 파악 내용을
-        이어받는다. LLM 백엔드는 AGENT_PROVIDER=ollama 기본(설정이 있으면 그대로).
+        전용 workspace + 폰(chat)별 세션/기억 파일로, 작업이 바뀌어도 이 폰의
+        이전 파악 내용·기억을 이어받는다. LLM 백엔드는 AGENT_PROVIDER=ollama 기본.
         """
         os.environ.setdefault("AGENT_PROVIDER", "ollama")
         cfg: Config = load_config_env()
         cfg.workspace_root = self._workspace
         if not cfg.session_file:
-            h = hashlib.md5(self._workspace.encode()).hexdigest()[:10]
-            cfg.session_file = os.path.expanduser(f"~/.autorcode/session_{h}.jsonl")
+            c = mem_chat()
+            key = c if c else hashlib.md5(self._workspace.encode()).hexdigest()[:10]
+            cfg.session_file = os.path.expanduser(f"~/.autorcode/session_{key}.jsonl")
             os.makedirs(os.path.dirname(cfg.session_file), exist_ok=True)
         cfg.show_steps = False  # stderr 로 나가지 않게 (폰에서는 먼저 실행 결과만)
         return Agent(cfg, confirmer=self._gate, progress=Progress(enabled=False))
