@@ -87,8 +87,13 @@ def _resolve_root(requested: str) -> str:
 ALLOW_LIST = {"web_search", "web_fetch", "youtube", "read_file", "list_dir",
               "grep_files", "bash", "write_file", "edit_file", "system_info",
               "service_status", "process_list", "service_logs",
-              "excel_summary", "excel_write", "pdf_read", "image_ocr",
-              "remember", "recall", "forget", "find_files", "disk_usage"}
+              "excel_summary", "excel_write", "pdf_read", "image_ocr", "image_describe",
+              "remember", "recall", "forget", "find_files", "disk_usage",
+              "memory_reflect", "memory_save_summary",
+              "geo_geocode", "geo_nearby", "geo_route",
+              "schedule_add", "schedule_list", "schedule_remove",
+              "study_save", "study_recall",
+              "goal_add", "goal_list", "goal_step", "goal_remove"}
 
 
 class Handler(BaseHTTPRequestHandler):

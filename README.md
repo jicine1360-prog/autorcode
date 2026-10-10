@@ -245,6 +245,11 @@ systemctl --user enable --now autorcode-bot
 (`~/.autorcode/goals.json.<chat>`)로 등록하면 단계별 진행(`goal_step`)을 관리하고,
 하루에 한 번 봇이 `🎯 목표 점검: …` 로 먼저 말을 건다(Muse/Dots 식 능동 에이전트).
 
+**사진 이해(VLM)**: 폰에서 사진을 보내면 워크스페이스 `inbox_*` 파일로 저장하고
+로컬 VLM(`qwen2.5vl:3b`, 기본)으로 내용/텍스트를 읽어 답한다(OCR(tesseract) 병용).
+사진은 기본 설정에서 밖으로 안 나간다. 클라우드 VLM 쓰려면
+`AUTORCODE_VISION_BASE_URL`/`AUTORCODE_VISION_MODEL`/`AUTORCODE_VISION_KEY` 지정.
+
 ## GPU 없이 사용하기 (OpenRouter)
 ollama 대신 클라우드 API로 같은 에이전트 호출 — 모델명에 `/`를 넣으면 자동 라우팅됩니다.
 ```bash

@@ -17,6 +17,8 @@ import json
 import logging
 import os
 import threading
+import time
+import urllib.parse
 import urllib.request
 from typing import Callable, Optional
 
@@ -49,7 +51,8 @@ HELP = (
     "거부하면 실행되지 않습니다.\n\n"
     "'근처/주변'은 내 위치 기준으로 알려드려요.\n"
     "'위치'라고 보내시면 공유 버튼이 올라옵니다.\n"
-    "'이번 달 ~~가 목표야' 라고 하면 장기 목표로 등록하고 주기적으로 점검해요."
+    "'이번 달 ~~가 목표야' 라고 하면 장기 목표로 등록하고 주기적으로 점검해요.\n"
+    "사진을 보내면(설명 첨부 가능) 로컬 VLM 으로 내용·텍스트를 읽어줘요."
 )
 _LOC_WORDS = ("위치", "gps", "좌표", "지금 있는 곳")
 _LOC_NEAR_WORDS = ("근처", "주변", "가까운")
@@ -188,10 +191,51 @@ class Bot:
             threading.Thread(target=self._on_location,
                              args=(chat_id, m["location"]), daemon=True).start()
             return
+        caption = str(m.get("caption") or "").strip()
+        if m.get("photo"):
+            threading.Thread(target=self._on_photo,
+                             args=(chat_id, m, caption), daemon=True).start()
+            return
         text = str(m.get("text") or "").strip()
         if not text:
             return
         self._handle(chat_id, text)
+
+    # -- 사진 --------------------------------------------------------------
+
+    def _photo_path(self, chat_id: int, m: dict) -> Optional[str]:
+        """ 텔레그램 사진(가장 큰 크기)을 워크스페이스 inbox 에 저장 → 경로(또는 None)."""
+        photos = m.get("photo") or []
+        if not photos:
+            return None
+        best = max(photos, key=lambda p: int(p.get("file_size") or 0))
+        try:
+            info = self._call("getFile", {"file_id": best.get("file_id")}) or {}
+            remote = str(info.get("file_path") or "")
+            if not remote:
+                log.warning("getFile 에 file_path 없음 (chat %s)", chat_id)
+                return None
+            url = f"{self._api}/file/bot{self._token}/{urllib.parse.quote(remote, safe='')}"
+            with self._opener(urllib.request.Request(url), timeout=60) as r:
+                data = r.read()
+            ext = os.path.splitext(remote)[1] or ".jpg"
+            name = f"inbox_{chat_id}_{int(time.time())}{ext}"
+            path = os.path.join(self._workspace, name)
+            with open(path, "wb") as f:
+                f.write(data)
+            return path
+        except Exception as e:
+            log.warning("사진 저장 실패(chat %s): %s", chat_id, e)
+            return None
+
+    def _on_photo(self, chat_id: int, m: dict, caption: str) -> None:
+        path = self._photo_path(chat_id, m)
+        if not path:
+            self.send(chat_id, "사진을 받긴 했는데 저장에 실패했어요. 다시 시도 부탁해요.")
+            return
+        rel = os.path.relpath(path, self._workspace)
+        q = caption or "이 사진에 뭐가 있는지, 텍스트가 있으면 그대로 읽어줘"
+        self._handle(chat_id, f"[사진 도착] 파일: {rel}\n요청: {q}")
 
     # -- 명령 --------------------------------------------------------------
 

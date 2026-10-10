@@ -14,6 +14,7 @@ from . import notes, safety, schedule, webtools
 from . import geo
 from . import goals
 from . import study
+from . import vision
 
 log = logging.getLogger("agent.tools")
 
@@ -574,6 +575,12 @@ def _image_ocr(args, root, max_output, timeout):
     return _cap(f"[OCR(사진→텍스트)] {path}\n{'-'*40}\n{text}", max_output) if len(text) > 0 else text
 
 
+def _image_describe(args, root, max_output, timeout):
+    path = safety.confine(str(args.get("path", "")), root)
+    q = str(args.get("question") or "")
+    return _cap(vision.describe(path, q, timeout=max(timeout, 60)), max_output)
+
+
 def _system_info(args, root, max_output, timeout):
     """지금 실제로 실행 중인 기기의 라이브 상태.
 
@@ -724,6 +731,7 @@ TOOLS: Dict[str, ToolFn] = {
     "excel_write": _excel_write,
     "pdf_read": _pdf_read,
     "image_ocr": _image_ocr,
+    "image_describe": _image_describe,
     "remember": _remember,
     "recall": _recall,
     "forget": _forget,
@@ -761,6 +769,7 @@ SCHEMAS = {
     "excel_write": "args: {path:str, content:str} — Markdown 표를 .xlsx 시트로 저장",
     "pdf_read": "args: {path:str} — PDF를 텍스트로 추출(pdftotext)",
     "image_ocr": "args: {path:str, lang?:str(kor+eng)} — 사진/스캔 이미지를 OCR로 텍스트화",
+    "image_describe": "args: {path:str, question?:str} — VLM(qwen2.5vl 로컬 기본)으로 사진 내용·질문 답변. 폰에서 온 사진 inbox 파일에 저장됨",
     "remember": "args: {fact:str, max_len?:int} — 서버 파악 사실뿐 아니라 '엄마 생일 3월 3일' 같은 개인 사실도 기억에 저장 (폰별 분리, 재방문 방지)",
     "recall": "args: {} — 지금까지 기억한 사실 목록 조회 (이 사람 전용)",
     "schedule_add": "args: {title:str, start:str, end?:str, note?:str} — 일정 저장. start/end 는 서울시간(KST, UTC+9) ISO8601 (예: 2026-10-10T18:00:00). 빈 자리는 첫 표시 시각으로 잡는다.",
