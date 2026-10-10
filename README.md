@@ -254,6 +254,8 @@ autorcode run deepseek/deepseek-chat-v3                            # REPL
 autorcode chat deepseek/deepseek-chat-v3                           # 도구 없이
 ```
 - ollama가 꺼져 있어도 `OPENROUTER_API_KEY`만 있으면 모델 없이 `run`해도 자동 전환됩니다.
+- 클라우드(로컬이 아닌 base_url)로 보내는 프롬프트의 **전화/이메일/주민번호/카드번호**는
+  자동으로 자리표시로 치환하고 응답에서만 원복한다(`AUTORCODE_PII_MASK=on|off`).
 - 둘 다 없으면 즉시 아래 안내와 함께 종료합니다 (예전엔 죽은 127.0.0.1로 3회 재시도):
   `sudo systemctl enable --now ollama` / `export OPENROUTER_API_KEY=sk-or-...` / `AGENT_BASE_URL`
 - 기본 클라우드 모델은 `OPENROUTER_MODEL`(기본 `deepseek/deepseek-chat-v3`)로 변경.

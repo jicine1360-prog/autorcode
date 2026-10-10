@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Callable, Optional
 
-from . import llm, memory, notes, permissions, router, tools
+from . import llm, memory, notes, permissions, privacy, router, tools
 from .config import Config
 from .progress import Progress, short, tool_label
 
@@ -110,6 +110,10 @@ class Agent:
             self.llm = llm.OpenAICompatibleLLM(
                 cfg.base_url, cfg.api_key, cfg.api_timeout, cfg.api_retries,
                 cfg.temperature, cfg.max_tokens, cfg.reasoning_effort)
+        # 클라우드(로컬 아님)로 보내는 프롬프트에서 PII 를 자리표시로 바꾼다.
+        self.mask_pii = (not cfg.use_mock and
+                         privacy.should_mask(cfg.base_url,
+                                             os.getenv("AUTORCODE_PII_MASK", "")))
         if cfg.session_file and os.path.isfile(cfg.session_file):
             self._load_session(cfg.session_file)
         self._sess = open(cfg.session_file, "a", encoding="utf-8") if cfg.session_file else None
@@ -262,8 +266,16 @@ class Agent:
                             self.progress.event(f"[{step}] {value}")
                             self.progress.update(activity, value)
 
-                    resp = self.llm.chat(msgs, model, stream=cfg.stream,
+                    send_msgs, pii_map = (privacy.mask_messages(msgs)
+                                          if self.mask_pii else (msgs, None))
+                    resp = self.llm.chat(send_msgs, model, stream=cfg.stream,
                                          on_event=on_event, tools=self.tool_schemas)
+                    if pii_map:
+                        resp.content = privacy.restore(resp.content or "", pii_map)
+                        for tc in resp.tool_calls or []:
+                            fn = tc.get("function")
+                            if isinstance(fn, dict) and isinstance(fn.get("arguments"), str):
+                                fn["arguments"] = privacy.restore(fn["arguments"], pii_map)
                 content = resp.content or ""
                 self.progress.event(f"[{step}] 모델 응답 수신 완료 · {activity.elapsed:.1f}s · {len(content):,}자")
             except llm.LengthError:
