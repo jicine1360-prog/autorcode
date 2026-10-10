@@ -105,7 +105,10 @@ autorcode run --auto qwen3.8 "로그 정리 스크립트 만들어서 저장해�
 ```bash
 autorcode mcp                    # 연결된 서버/도구 목록
 ```
-- 에이전트가 `mcp_<서버>_<도구>` 이름으로 자동 호출. ⚠️ MCP 도구는 autorcode 샌드박스를 우회하므로 신뢰하는 서버만 등록할 것.
+- 에이전트가 `mcp_<서버>_<도구>` 이름으로 자동 호출. 도구 설명·입력 스키마(`tools/list`)가
+  시스템 프롬프트와 function-calling 스키마에 그대로 노출된다(전용 stdio 클라이언트, 표준 라이브러리).
+- 설정 경로는 `AUTORCODE_MCP_CONFIG` 로 바꿀 수 있고, `AUTORCODE_MCP_DISABLE=1` 이면 MCP 를 끈다.
+- ⚠️ MCP 도구는 autorcode 샌드박스를 우회하므로(서버가 직접 실행) 신뢰하는 서버만 등록할 것.
 
 ### 텔레그램 일일 리포트
 ```bash

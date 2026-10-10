@@ -736,8 +736,23 @@ SCHEMAS = {
 }
 
 
+def _mcp_specs() -> dict:
+    """연결된 MCP 도구 스펙. AUTORCODE_MCP_DISABLE=1 이면 건너뛴다."""
+    if os.getenv("AUTORCODE_MCP_DISABLE"):
+        return {}
+    try:
+        from . import mcp as mcp_mod
+        return mcp_mod.tool_specs()
+    except Exception:
+        log.warning("MCP 도구 목록을 불러오지 못했습니다", exc_info=True)
+        return {}
+
+
 def schema_text() -> str:
-    return "\n".join(f"- {name}: {desc}" for name, desc in SCHEMAS.items())
+    lines = [f"- {name}: {desc}" for name, desc in SCHEMAS.items()]
+    for full, s in _mcp_specs().items():
+        lines.append(f"- {full}: [MCP {s['server']}] {s['description']}")
+    return "\n".join(lines)
 
 
 _ARGS_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\?)?:(.+)$")
@@ -800,6 +815,12 @@ def native_schemas() -> list:
         out.append({"type": "function",
                     "function": {"name": name, "description": desc,
                                  "parameters": _json_schema(argspec)}})
+    for full, s in _mcp_specs().items():
+        out.append({"type": "function",
+                    "function": {"name": full,
+                                 "description": f"[MCP {s['server']}] {s['description']}",
+                                 "parameters": s.get("inputSchema")
+                                 or {"type": "object", "properties": {}}}})
     out.append({"type": "function",
                 "function": {"name": "done",
                              "description": "모든 작업이 끝나 최종 답변을 낼 준비가 되면 호출하라. "

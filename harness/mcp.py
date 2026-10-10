@@ -28,10 +28,23 @@ PROTOCOL_VERSION = "2024-11-05"
 CONFIG_PATH = os.path.expanduser("~/.autorcode/mcp.json")
 _TIMEOUT = float(os.getenv("AUTORCODE_MCP_TIMEOUT", "60"))
 
+_SPECS_CACHE = None
+
+
+def config_path() -> str:
+    """설정 경로 — 테스트/재정의용 AUTORCODE_MCP_CONFIG 로 바꿀 수 있다."""
+    return os.path.expanduser(os.getenv("AUTORCODE_MCP_CONFIG") or CONFIG_PATH)
+
+
+def clear_cache() -> None:
+    """도구 스펙 캐시 비우기(설정 변경/테스트용)."""
+    global _SPECS_CACHE
+    _SPECS_CACHE = None
+
 
 def _load_config() -> dict:
     try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
+        with open(config_path(), encoding="utf-8") as f:
             data = json.load(f)
         servers = data.get("mcpServers")
         return servers if isinstance(servers, dict) else {}
@@ -177,16 +190,39 @@ def _tool_fn(server_name: str, tool_name: str, description: str):
 
 
 def mcp_tool_fns() -> Dict[str, object]:
-    """전 서버의 도구를 "mcp_<서버>_<도구>" 이름으로 수집. 연결 실패 서버는 건너뛴다."""
-    fns: Dict[str, object] = {}
+    """전 서버의 도구를 "mcp_<서버>_<도구>" 이름으로 수집(스펙 캐시 재사용)."""
+    return {full: _tool_fn(s["server"], s["tool"], s["description"])
+            for full, s in tool_specs().items()}
+
+
+def tool_specs(refresh: bool = False) -> Dict[str, dict]:
+    """{ "mcp_<서버>_<도구>": {server, tool, description, inputSchema} } — 캐시.
+
+    에이전트의 도구 목록(schema_text/native_schemas)에 MCP 도구를 노출하기 위한
+    메타데이터. 서버 연결 실패는 건너뛴다(로컬/오프라인에서도 안전).
+    """
+    global _SPECS_CACHE
+    if _SPECS_CACHE is not None and not refresh:
+        return _SPECS_CACHE
+    specs: Dict[str, dict] = {}
     for name in _load_config():
         try:
             c = _client(name)
-            for t in c.list_tools():
-                tname = t.get("name")
-                if tname:
-                    fns[f"mcp_{name}_{tname}"] = _tool_fn(name, tname, t.get("description") or "")
-            c.close()
+            try:
+                for t in c.list_tools():
+                    tname = t.get("name")
+                    if not tname:
+                        continue
+                    specs[f"mcp_{name}_{tname}"] = {
+                        "server": name,
+                        "tool": tname,
+                        "description": t.get("description") or f"MCP {name}/{tname}",
+                        "inputSchema": t.get("inputSchema")
+                        or {"type": "object", "properties": {}},
+                    }
+            finally:
+                c.close()
         except Exception as e:
             log.warning("MCP 서버 %s 연결 실패: %s", name, e)
-    return fns
+    _SPECS_CACHE = specs
+    return specs

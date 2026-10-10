@@ -214,7 +214,7 @@ def cmd_report(_args):
 
 def cmd_mcp(_args):
     from harness import mcp as mcp_mod
-    print(f"설정     : {mcp_mod.CONFIG_PATH}")
+    print(f"설정     : {mcp_mod.config_path()}")
     servers = mcp_mod.mcp_servers()
     if not servers:
         print("등록된 MCP 서버 없음 — 예시:")
