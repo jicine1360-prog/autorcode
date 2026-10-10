@@ -157,6 +157,9 @@ class ApprovalGate:
         self._thread: Optional[threading.Thread] = None
         self._offset: Optional[int] = None
         self._target = sorted(self._allowed)[0]
+        # 작업이 시작된 chat 으로 승인을 돌려보내기 위한 오버라이드.
+        # Bot(bot.py) 이 작업 스레드 진입 시 설정하고, None 이면 첫 허용 chat 으로 간다.
+        self.current_chat: Optional[int] = None
 
     # -- Telegram API ------------------------------------------------------
 
@@ -185,7 +188,7 @@ class ApprovalGate:
             return False
 
         nonce = secrets.token_hex(12)
-        pending = _Pending(self._target)
+        pending = _Pending(self.current_chat or self._target)
         with self._lock:
             self._pending[nonce] = pending
 
@@ -323,6 +326,18 @@ class ApprovalGate:
             self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": text})
         except Exception as e:
             log.debug("콜백 응답 실패(무시): %s", e)
+
+    # -- 외부 폴러 연동 ----------------------------------------------------
+
+    def feed(self, update: dict) -> None:
+        """외부 폴러(예: Bot)가 받아 들여온 raw update 를 게이트에 넣는다.
+
+        getUpdates 는 토큰당 소비자가 한 명이어야 하므로, 승인 게이트가 직접
+        폴링하는 대신(bot.py 의 봇이 폴링) 여기로 callback_query 를 넘겨받아
+        기존 _dispatch 검증(논스 1회용 · 사용자 화이트리스트 · chat 일치)을 그대로
+        사용한다. _dispatch 가 이미 callback_query 만 처리하므로 안전하다.
+        """
+        self._dispatch(update)
 
 
 # ---------------------------------------------------------------------------

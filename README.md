@@ -147,6 +147,65 @@ TTY 가 있는 터미널에서는 기존처럼 `y/N` 으로 묻는다 — 게이
 > 이제는 **폰 응답을 기다린다**. `approveTimeout` 이 서비스의 `TimeoutSec` 보다 짧아야
 > 그렇지 않으면 잡이 타임아웃으로 죽는다. 게이트가 켜진 사실은 로그에 남는다.
 
+### 폰 비서 (autorcode bot) — 텔레그램에서 명령 + 승인
+
+폰 메시지로 작업을 시키고, 민감 작업은 폰의 `승인`/`거부` 버튼으로 결정하는
+**개인 AI 비서** 모드다. getUpdates(long-polling) 하나가 승인 버튼과 명령 텍스트를
+**같이** 받는다 — 여는 포트가 없다.
+
+```
+autorcode bot                 # 폴러 실행 (Ctrl+C 로 종료)
+autorcode bot --token ... --chat ...   # 설정 파일 없이 직접 지정
+```
+
+명령 (`/help` 로 확인):
+- 명령이 아닌 텍스트 → 전부 **작업 지시**로 실행 (로컬 ollama/모델)
+- `/status` 서버 상태 요약 · `/report` 일일 리포트
+
+작업 중 민감한 지시가 나오면 **같은 대화방**으로 `승인`/`거부` 버튼이 온다.
+거부하면 실행되지 않는다. 작업은 한 번에 하나(중복 방지), 결과는 작업 후 같은 방으로.
+
+**전용 봇을 만든다(필수).** 같은 봇 토큰은 폴러가 하나만 살 수 있다(409).
+openclaw 등이 같은 토큰을 폴링 중이면(기사에 나온 그 openclaw!) 봇이 포기한다.
+
+1. 텔레그램에서 `@BotFather` → `/newbot` → 이름/봇 계정 입력 → 토큰 발급
+2. 봇에게 대화 한 번 보내고, `@userinfobot`(또는 봇의 메시지에서) 자기 chat id 확인
+3. `~/.autorcode/bot.json` 작성 후 `chmod 600`:
+
+```json
+{ "token": "999999999:AA...", "chat": 123456789,
+  "allowedChatIds": [123456789], "approveTimeout": 180 }
+```
+
+4. 상시 실행(사용자 systemd):
+
+```bash
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/autorcode-bot.service <<'EOF'
+[Unit]
+Description=autorcode 폰 비서 — 텔레그램 폴러(명령 실행 + 승인 버튼)
+After=ollama.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+Environment=AGENT_PROVIDER=ollama
+ExecStart=%h/.local/bin/autorcode bot --verbose
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload
+systemctl --user enable --now autorcode-bot
+```
+
+없으면 `~/.autorcode/telegram.json` 을 호환으로 쓴다(리포트/구승인 게이트 공용 토큰).
+작업 workspace 는 `~/autorcode-bot`(또는 `AUTORCODE_BOT_WORKSPACE`), 세션과 기억은
+그 workspace 기준으로 이어진다.
+
 ## GPU 없이 사용하기 (OpenRouter)
 ollama 대신 클라우드 API로 같은 에이전트 호출 — 모델명에 `/`를 넣으면 자동 라우팅됩니다.
 ```bash

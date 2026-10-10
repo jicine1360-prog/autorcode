@@ -4,6 +4,7 @@
   autorcode run [model] [prompt]  # 모델 지정 실행/REPL (ollama run 처럼)
   autorcode list                  # 설치된 ollama 모델 목록
   autorcode chat model            # 도구 없는 단순 대화
+  autorcode bot                   # 폰 비서 — 텔레그램 폴러(명령+승인)
   autorcode doctor                # 환경 자가진단
   autorcode help                  # 전체 치트시트
 """
@@ -19,7 +20,7 @@ import urllib.request
 _HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))
 
-from harness import agent_core, approve, config, llm, tools  # noqa: E402
+from harness import agent_core, approve, bot, config, llm, tools  # noqa: E402
 from harness.progress import Progress, short  # noqa: E402
 
 
@@ -455,6 +456,36 @@ def cmd_chat(args):
         print(f"보조개> {a}\n")
 
 
+def cmd_bot(args) -> int:
+    """폰 비서: 이름 있는 봇 토큰의 폴러 하나로 승인+명령을 처리한다."""
+    config.setup_logging(args.verbose)
+    b = bot.build_bot() if getattr(args, "token", None) is None else None
+    if b is None:
+        if getattr(args, "token", None):
+            # 명시 토큰 = 테스트/디버그 경로. 그래도 허용 chat 이 있어야 막는 목적이 산다.
+            token = args.token
+            chat = (args.chat or "").strip()
+            if not chat:
+                print("[오류] 토큰을 지정하려면 --chat(허용 chat id)도 필요합니다", file=sys.stderr)
+                return 1
+            from harness.approve import DEFAULT_TIMEOUT
+            from harness.bot import Bot
+            b = Bot(token, [int(chat)])
+        else:
+            print("[오류] 폰 비서 설정이 없습니다: ~/.autorcode/bot.json "
+                  "(token + allowedChatIds, 전용 토큰 권장) 또는 기존 ~/.autorcode/telegram.json",
+                  file=sys.stderr)
+            return 1
+    b.start()
+    print(f"[봇] 폴러 시작 — 허용 {len(b._allowed)}명 · Ctrl+C 로 종료", file=sys.stderr)
+    try:
+        if b._thread is not None:
+            b._thread.join()
+    except KeyboardInterrupt:
+        print("\n[봇] 종료", file=sys.stderr)
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="autorcode", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -497,6 +528,11 @@ def main() -> int:
     p.set_defaults(fn=cmd_mcp)
     p = sub.add_parser("report", help="서버 상태 리포트 — 텔레그램 전송(토큰 있으면) 또는 stdout")
     p.set_defaults(fn=cmd_report)
+    p = sub.add_parser("bot", help="폰 비서 — 텔레그램 폴러(명령+승인) 실행")
+    p.add_argument("--token", default=None, help="수신용 봇 토큰 (기본: ~/.autorcode/bot.json → telegram.json)")
+    p.add_argument("--chat", default=None, help="허용 chat id (토큰 직접 지정 시 필수)")
+    p.add_argument("--verbose", action="store_true", help="진단 로그 출력")
+    p.set_defaults(fn=cmd_bot)
     p = sub.add_parser("help", help="전체 치트시트")
     p.set_defaults(fn=cmd_help)
 
