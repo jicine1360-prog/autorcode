@@ -20,6 +20,7 @@ import threading
 import urllib.request
 from typing import Callable, Optional
 
+from . import goals
 from . import location as loc
 from . import schedule as sched
 from . import study
@@ -47,7 +48,8 @@ HELP = (
     "민감한 명령은 여기서 승인/거부 버튼을 눌러 결정하고,\n"
     "거부하면 실행되지 않습니다.\n\n"
     "'근처/주변'은 내 위치 기준으로 알려드려요.\n"
-    "'위치'라고 보내시면 공유 버튼이 올라옵니다."
+    "'위치'라고 보내시면 공유 버튼이 올라옵니다.\n"
+    "'이번 달 ~~가 목표야' 라고 하면 장기 목표로 등록하고 주기적으로 점검해요."
 )
 _LOC_WORDS = ("위치", "gps", "좌표", "지금 있는 곳")
 _LOC_NEAR_WORDS = ("근처", "주변", "가까운")
@@ -253,8 +255,12 @@ class Bot:
             try:
                 for chat_id, text in sched.scan_due(self._workspace):
                     self.send(chat_id, f"⏰ 일정: {text}")
+                goals_dir = os.path.expanduser(
+                    os.getenv("AUTORCODE_GOALS_DIR", "~/.autorcode"))
+                for chat_id, text in goals.scan_due(goals_dir):
+                    self.send(chat_id, f"🎯 {text}")
             except Exception:
-                log.exception("스케줄 알림 오류")
+                log.exception("스케줄/목표 알림 오류")
             self._stop.wait(20)
 
     # -- 작업 --------------------------------------------------------------

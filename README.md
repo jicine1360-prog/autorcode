@@ -241,6 +241,10 @@ systemctl --user enable --now autorcode-bot
 조사해 핵심 정리를 폰별(`~/.autorcode/study.json.<chat>`)로 저장한다. 다음 질문에는
 준비된 주제 힌트가 작업 앞에 실려 `study_recall` 로 꺼내 답한다.
 
+**장기 목표(능동 점검)**: "이번 달 살 빼는 게 목표야" 같은 지속 목표를 폰별
+(`~/.autorcode/goals.json.<chat>`)로 등록하면 단계별 진행(`goal_step`)을 관리하고,
+하루에 한 번 봇이 `🎯 목표 점검: …` 로 먼저 말을 건다(Muse/Dots 식 능동 에이전트).
+
 ## GPU 없이 사용하기 (OpenRouter)
 ollama 대신 클라우드 API로 같은 에이전트 호출 — 모델명에 `/`를 넣으면 자동 라우팅됩니다.
 ```bash
