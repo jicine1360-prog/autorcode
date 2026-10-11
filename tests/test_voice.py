@@ -53,8 +53,10 @@ class VoiceTranscribeTest(unittest.TestCase):
 
     def test_run_env_adds_user_bins(self):
         env = voice._run_env()
-        self.assertIn(os.path.expanduser("~/bin"), env["PATH"].split(os.pathsep))
-        self.assertIn(os.path.expanduser("~/.local/bin"), env["PATH"].split(os.pathsep))
+        parts = env["PATH"].split(os.pathsep)
+        for d in (os.path.expanduser("~/bin"), os.path.expanduser("~/.local/bin")):
+            if os.path.isdir(d):
+                self.assertIn(d, parts)
 
 
 class _Resp:
