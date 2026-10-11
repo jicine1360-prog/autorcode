@@ -59,11 +59,14 @@ class FakeAgent:
         return f"ANSWER({len(self.runs)})"
 
 
-def _msg(chat, text, user=None):
+def _msg(chat, text, user=None, first=None):
+    frm = {"id": user or chat}
+    if first:
+        frm["first_name"] = first
     return {"update_id": 1, "message": {
         "message_id": 1,
         "chat": {"id": chat},
-        "from": {"id": user or chat},
+        "from": frm,
         "text": text,
     }}
 
@@ -100,11 +103,27 @@ class MessageDispatchTest(unittest.TestCase):
         # 회신은 명령을 보낸 chat 으로 간다
         self.assertEqual(self.api.calls[-1][1]["chat_id"], 555)
 
-    def test_non_allowed_chat_ignored(self):
-        self.b._dispatch(_msg(999, "실행"))
+    def test_non_allowed_chat_gets_notice(self):
+        # 허용목록 밖 1:1 은 작업은 안 하되, 안내 답장 + 관리자 알림을 한다.
+        self.b._dispatch(_msg(999, "실행", first="낯선사람"))
         time.sleep(0.1)
         self.assertEqual(self.agent.runs, [])
-        self.assertEqual(self.api.sent_texts(), [])
+        texts = self.api.sent_texts()
+        self.assertTrue(any("등록된 가족" in t for t in texts))          # 낯선이 안내
+        self.assertTrue(any("999" in t for t in texts))                  # chat id 노출
+        self.assertTrue(any("새 사람이 봇에" in t for t in texts))        # 관리자 알림
+
+    def test_unknown_chat_notified_once(self):
+        for _ in range(3):
+            self.b._dispatch(_msg(999, "또"))
+        time.sleep(0.1)
+        notices = [t for t in self.api.sent_texts() if "등록된 가족" in t]
+        self.assertEqual(len(notices), 1)
+
+    def test_group_chat_ignored(self):
+        self.b._dispatch({"message": {"chat": {"id": -100123}, "text": "안녕"}})
+        time.sleep(0.05)
+        self.assertEqual(self.agent.runs, [])
 
     def test_busy_rejects_second(self):
         self.b._busy = True

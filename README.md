@@ -187,6 +187,11 @@ chmod 600 ~/.autorcode/bot.env
    쓰면 같은 동작. **봇과 대화를 시작한 사람만** 목록에 의미가 있다(안 한 chat 으로는
    Telegram 이 sendMessage 를 'chat not found' 로 거부한다 — 각자 봇에 첫 말부터).
 
+   목록에 없는 사람이 1:1 로 말을 걸면 봇이 **미등록 안내 답장**(자기 chat id 포함)을
+   한 번 보내고, 관리자(첫 번째 chat)에게 그 chat id 를 알려준다. 그 id 를
+   `AGENTUPBOT_CHAT` 에 추가하고 재시작하면 등록된다. (그룹/채널은 아직 미지원 —
+   로그만 남긴다.)
+
    (파일 대신 `~/.autorcode/bot.json` 의 `token`/`chat`/`allowedChatIds` 로도 된다)
 
 4. 상시 실행(사용자 systemd):

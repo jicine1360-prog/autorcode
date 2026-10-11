@@ -83,6 +83,8 @@ class Bot:
     ):
         self._token = token
         self._allowed = set(allowed)
+        self._owner = int(allowed[0]) if allowed else 0
+        self._notified: set[int] = set()
         self._api = api_base.rstrip("/")
         self._opener = opener or urllib.request.urlopen
         self._gate = gate or ApprovalGate(token, list(self._allowed))
@@ -187,9 +189,11 @@ class Bot:
             return
         chat_id = int(((m.get("chat") or {}).get("id") or 0))
         if chat_id <= 0:
+            # 그룹/채널은 아직 지원하지 않는다 — 조용히 넘기지 말고 로그만 남긴다.
+            log.info("그룹/채널 chat(%s) 메시지는 무시(개인 채팅만 지원)", chat_id)
             return
         if chat_id not in self._allowed:
-            log.warning("허용되지 않은 chat(%s) 의 메시지 무시", chat_id)
+            self._on_unknown(chat_id, m)
             return
         if m.get("location"):
             threading.Thread(target=self._on_location,
@@ -210,7 +214,31 @@ class Bot:
             return
         self._handle(chat_id, text)
 
-    # -- 미디어(사진/음성) 다운로드 ------------------------------------------
+    def _on_unknown(self, chat_id: int, m: dict) -> None:
+        """허용목록 밖 개인 채팅 — 조용히 버리지 말고 1회 안내 + 관리자에게 알림.
+
+        봇을 공유받은 사람이 말을 걸었는데 아무 답도 못 받는 상황을 막는다.
+        같은 chat 에는 한 번만 답하고(스팸 방지), 관리자(첫 허용 chat)에게
+        추가용 chat id 를 알려준다.
+        """
+        f = m.get("from") or {}
+        who = (f"@{f['username']}" if f.get("username")
+               else f.get("first_name") or "알 수 없음")
+        log.warning("허용되지 않은 chat(%s, %s) 메시지 — 안내+알림", chat_id, who)
+        if chat_id in self._notified:
+            return
+        self._notified.add(chat_id)
+        self.send(chat_id,
+                  "안녕하세요! 이 봇은 등록된 가족만 쓸 수 있어요.\n"
+                  "관리자에게 아래 번호를 알려주시면 등록해 드릴게요.\n"
+                  f"내 chat id: {chat_id}")
+        if self._owner and self._owner != chat_id:
+            self.send(self._owner,
+                      f"🔔 새 사람이 봇에 말을 걸었어요: {who} (chat id {chat_id})\n"
+                      f"등록하려면 서버의 ~/.autorcode/bot.env > AGENTUPBOT_CHAT 에 "
+                      f"{chat_id} 추가 후 봇 재시작.")
+
+    # -- 미디어 ------------------------------------------------------------
 
     def _save_remote(self, chat_id: int, file_id: str, prefix: str = "inbox") -> Optional[str]:
         """getFile → 다운로드 → 워크스페이스 저장. 실패 시 None."""
