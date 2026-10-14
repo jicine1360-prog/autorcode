@@ -158,7 +158,7 @@ TUI 모드 (autorcode tui · Textual 필요: pip install 'autorcode[tui]')
 
 환경변수 (AGENT_*)
   MODEL_FAST(기본 phi4:latest) MODEL_SMART(qwen3.8:27b-hunmin-64k)
-  API_TIMEOUT(120) MAX_STEPS(15) BASH_TIMEOUT(30) CONTEXT_TOKENS(40000)
+  API_TIMEOUT(120) MAX_STEPS(0=무제한) BASH_TIMEOUT(30) CONTEXT_TOKENS(40000)
   MAX_TOKENS(8192) REASONING_EFFORT(로컬 기본 none) RLIMIT_MEM_MB(4096) SESSION, PERMS
   MEMORY_FILE(기본 ~/.autorcode/memory.txt) MEMORY_MAX_CHARS(3000)
   SHOW_STEPS(1) SHOW_DETAILS(0) STREAM(1) — 0/1로 표시·스트리밍 설정

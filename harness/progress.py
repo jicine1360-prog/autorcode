@@ -163,3 +163,11 @@ class Progress:
         기반 Progress 는 무음으로 둔다.
         """
         return None
+
+    def thought(self, step, text):
+        """모델이 이번 단계에서 밝힌 계획(thought) 훅 — 기본은 무음.
+
+        TUI 는 이 훅을 재정의해 '무엇을 왜 하는지'를 로그에 남긴다. 스트림
+        모드는 원시 추론을 노출하지 않으므로 기반 Progress 는 아무것도 하지 않는다.
+        """
+        return None

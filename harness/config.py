@@ -33,7 +33,8 @@ class Config:
     api_retries: int = int(os.getenv("AGENT_API_RETRIES", "3"))
 
     # --- 루프 가드 ---
-    max_iterations: int = int(os.getenv("AGENT_MAX_STEPS", "15"))
+    # 0 이하면 무제한(단계 한도 없음). 기본은 무제한 — Esc/Ctrl+C 로 언제든 취소.
+    max_iterations: int = int(os.getenv("AGENT_MAX_STEPS", "0"))
 
     # --- 도구 하네스 한도 ---
     bash_timeout: int = int(os.getenv("AGENT_BASH_TIMEOUT", "30"))

@@ -105,6 +105,9 @@ class TuiProgress:
     def tool_start(self, name, args, label):
         self.app.call_from_thread(self.app.handle_tool_start, str(name), dict(args), str(label))
 
+    def thought(self, step, text):
+        self.app.call_from_thread(self.app.handle_thought, int(step), short(text))
+
 
 def build(cfg, model="", permissions=None):
     """cli.cmd_tui 진입점 — Textual 앱을 만들어 실행한다."""
@@ -120,7 +123,7 @@ def _build_app_classes():
     from textual.containers import Vertical, VerticalScroll
     from textual.screen import ModalScreen
     from textual.widgets import (
-        Button, Collapsible, Input, Markdown, OptionList, Static,
+        Button, Input, Markdown, OptionList, Static,
     )
     from textual.widgets.option_list import Option
     from rich.text import Text
@@ -138,12 +141,23 @@ def _build_app_classes():
         def __init__(self, text):
             super().__init__(text, classes="assistant")
 
+    class StepLine(Static):
+        """단계 헤더 — 모델이 이번 단계에서 밝힌 계획(thought)을 한 줄로."""
+
+        def __init__(self, step, thought):
+            super().__init__(Text.assemble(
+                (f"\n◆ {step}단계 ", "bold cyan"),
+                (short(thought, 240), ""),
+            ), classes="step")
+
     class ToolCard(Vertical):
-        """도구 실행 카드 — 헤더(아이콘·라벨·상태·시간) + 본문(결과/diff).
+        """도구 실행 한 줄 — 헤더(아이콘·라벨·상태·시간) + 결과 미리보기.
 
         결과는 상태로만 저장하고 compose 에서 그린다. 도구가 빨리 끝나
         mount 직후 result 가 오면 자식이 아직 안 만들어졌을 수 있으므로
-        query_one 대신 refresh(recompose=True) 로 다시 그린다.
+        query_one 대신 refresh(recompose=True) 로 다시 그린다. 테두리 박스
+        대신 들여쓴 로그 라인으로 그려, 여러 도구가 쌓여도 '네모칸'이
+        줄줄이 생기지 않는다.
         """
 
         def __init__(self, name, args, label):
@@ -171,13 +185,17 @@ def _build_app_classes():
         def _head(self):
             icon = _TOOL_ICON.get(self.tool_name, "•")
             if self._result is None:
-                return Text(f"  {icon} {short(self.tool_label, 120)}", style="bold")
+                return Text.assemble(
+                    (f"  {icon} ", "bold cyan"),
+                    (short(self.tool_label, 120), ""),
+                    ("  실행 중…", "dim italic"),
+                )
             status = result_status(self._result)
             style = _STATUS_STYLE.get(status, "green")
             return Text.assemble(
                 (f"  {icon} ", "bold"),
                 (short(self.tool_label, 120), ""),
-                (f"   [{status}] {self._elapsed:.1f}s · {len(self._result):,}자", style),
+                (f"  {status} · {self._elapsed:.1f}s · {len(self._result):,}자", style),
             )
 
         def _body_widgets(self):
@@ -193,12 +211,17 @@ def _build_app_classes():
                                   str(self.tool_args.get("content", "")),
                                   str(self.tool_args.get("path", "")))
             if diff is not None:
-                return [Collapsible(Static(diff), title="변경 diff", collapsed=False)]
+                return [Static(diff, classes="tool-body")]
+
             lines = [ln for ln in clean(self._result).splitlines() if ln.strip()]
-            preview = "\n".join(lines[:12]) or self._result
             status = result_status(self._result)
-            return [Collapsible(Static(Text(preview, style="dim")), title="결과 보기",
-                                collapsed=(status != "완료"))]
+            limit = 12 if status == "완료" else 20
+            body = "\n".join("    │ " + short(ln, 200) for ln in lines[:limit])
+            if len(lines) > limit:
+                body += f"\n    └ … {len(lines) - limit}줄 더"
+            style = "dim" if status == "완료" else "red"
+            return [Static(Text(body or short(self._result, 200), style=style),
+                           classes="tool-body")]
 
         def compose(self) -> ComposeResult:
             yield Static(self._head(), classes="tool-head")
@@ -315,9 +338,10 @@ def _build_app_classes():
         .notice.error { color: $error; }
         .notice.warn { color: $warning; }
         .notice.ok { color: $success; }
-        .tool { border: round $primary 40%; margin: 0 0 0 0; padding: 0; }
+        .step { color: $text; height: auto; }
+        .tool { margin: 0; padding: 0; height: auto; }
         .tool-head { color: $text; }
-        .tool-body { padding: 0 1; }
+        .tool-body { color: $text-muted; padding: 0 0 0 2; height: auto; }
         .dialog { width: 80%; max-width: 100; height: auto; max-height: 80%;
                   border: thick $accent; background: $surface; padding: 1 2; }
         .dialog-title { text-style: bold; padding: 0 0 1 0; }
@@ -453,6 +477,11 @@ def _build_app_classes():
             self._activity = None
             self._recv = ""
             self._render_activity()
+
+        def handle_thought(self, step, text):
+            if not text:
+                return
+            self._mount(StepLine(step, text))
 
         def handle_tool_start(self, name, args, label):
             card = ToolCard(name, args, label)

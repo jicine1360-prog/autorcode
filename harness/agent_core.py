@@ -248,13 +248,19 @@ class Agent:
         self.progress.event(f"[시작] {model} · {tier} · 작업 위치: {cfg.workspace_root}")
         self.mem.add("user", task, stats)
         violations = 0
-        for step in range(1, cfg.max_iterations + 1):
+        limit = cfg.max_iterations  # 0 이하 = 무제한
+        step = 0
+        while True:
+            step += 1
+            if limit > 0 and step > limit:
+                break
+            step_tag = f"[{step}/{limit}]" if limit > 0 else f"[{step}]"
             stats["steps"] = step
             msgs = self.mem.messages()
             stats["in_tokens"] += sum(memory.estimate(m["content"]) for m in msgs)
             try:
                 with self.progress.activity(
-                    f"[{step}/{cfg.max_iterations}] 모델 응답 대기 · {model}"
+                    f"{step_tag} 모델 응답 대기 · {model}"
                 ) as activity:
                     received = False
 
@@ -353,6 +359,7 @@ class Agent:
                     stats["tools"][n] = stats["tools"].get(n, 0) + 1
                 log.info("step %d: native tools=%s", step,
                          ", ".join(a["tool"] for a in actions))
+                self._emit_thought(step, content)
                 obs = self._execute_items([(a["tool"], a["args"]) for a in actions], step)
                 self.mem.add_tool_results(
                     [c.get("id") or f"call_{step}_{i}" for i, c in enumerate(tool_calls)],
@@ -395,13 +402,22 @@ class Agent:
             for n in ([name] if "tool" in action else [a.get("tool", "?") for a in action.get("actions", [])]):
                 stats["tools"][n] = stats["tools"].get(n, 0) + 1
             log.info("step %d: tools=%s", step, [a["tool"] for a in action.get("actions", [action])])
+            self._emit_thought(step, action.get("thought", ""))
             obs = self._run_action(action, step)
             self.mem.add("user", f"[도구 결과] →\n<untrusted>\n{obs[:cfg.max_output]}\n</untrusted>", stats)
 
-        out = (f"[중단] 최대 스텝({cfg.max_iterations}) 초과 — 진행상황은 {cfg.log_file} 확인"
+        out = (f"[중단] 최대 스텝({limit}) 초과 — 진행상황은 {cfg.log_file} 확인"
                f" (도구사용 {stats['tools']})")
-        self.progress.event(f"[중단] 단계 한도 {cfg.max_iterations}회 도달")
+        self.progress.event(f"[중단] 단계 한도 {limit}회 도달")
         return out
+
+    def _emit_thought(self, step, text):
+        """모델이 밝힌 계획을 진행 훅으로 내보낸다. 비어 있으면 무시."""
+        if not isinstance(text, str):
+            return
+        plan = text.strip()
+        if plan:
+            self.progress.thought(step, plan)
 
     def _model_for(self, tier: str) -> str:
         return self.cfg.model_smart if tier == "smart" else self.cfg.model_fast
