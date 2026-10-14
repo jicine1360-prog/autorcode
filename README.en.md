@@ -72,6 +72,7 @@ autorcode run phi4 "list files"  # one-shot run — partial name (phi4) auto-mat
 autorcode run phi4               # interactive REPL
 autorcode chat phi4              # plain chat, no tools
 autorcode run                    # no argument → uses the currently loaded model
+autorcode tui                    # full-screen TUI (opencode-style, needs Textual)
 ```
 **Pin a model**: `autorcode run <model>` — that run ignores the fast/smart router
 and uses the given model alone. No need to change the defaults.
@@ -178,6 +179,41 @@ The following commands work inside a conversation without calling the model.
 tool lists are not reflected automatically in an already running process. The waiting indicator
 does not guess whether the model is loading or inferring; before the server sends an actual
 response it always shows 'waiting for model response'.
+
+## Full-screen TUI (`autorcode tui`)
+
+An opencode-style terminal GUI. It reuses the exact same harness as `run` but renders
+progress as a **status bar · tool cards · diffs · approval modals**.
+
+```bash
+pip install 'autorcode[tui]'     # or: pip install textual
+autorcode tui                     # start with the loaded (or first) model
+autorcode tui qwen3.8:27b-bf16    # pick a model
+```
+
+- **Status bar**: current model · routing tier · workspace · permissions · current step
+- **Tool cards**: tool name/args/status (ok/failed/denied/timeout) · elapsed · result
+  preview (collapsible). Failed cards auto-expand.
+- **Edit diffs**: `write_file`/`edit_file` shown as colored unified diffs (vs previous
+  file content, or old/new strings)
+- **Approval modal**: sensitive actions open a centered modal — `approve (y)` / `deny (n)` / Esc
+- **Streaming**: live received-character count while waiting (raw JSON/reasoning hidden)
+
+Keys:
+
+| Key | Action | Key | Action |
+|---|---|---|---|
+| `Enter` | submit | `F2` | model picker |
+| `Ctrl+P` | command palette | `F3` | session/history browser |
+| `Ctrl+T` | cycle theme | `Ctrl+L` | clear screen |
+| `Esc` | cancel current run | `Ctrl+Q` | quit |
+
+Slash commands: `/help` `/model` `/sessions` `/theme` `/status` `/tools` `/clear`
+`/auto on|off` `/quit`
+
+> Textual is an **optional** dependency. Without it, `autorcode tui` exits with an
+> install hint, and every other CLI mode (`run`/`chat`/`bot`/…) still runs on the
+> standard library alone.
 
 ## How it works
 `judgement (LLM) ↔ tool_calls protocol (native, JSON fallback) ↔ harness (tool execution / permissions / sandbox)`

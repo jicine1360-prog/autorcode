@@ -177,6 +177,7 @@ class Agent:
             if len(ready) > 1:
                 self.progress.event(f"[{step}] 쓰기·셸·영상 작업 포함 — 순서대로 실행")
             for i, name, args, label in ready:
+                self.progress.tool_start(name, args, label)
                 with self.progress.activity(f"[{label}] 실행 중"):
                     result, elapsed = self._execute(name, args)
                 results[i] = result
@@ -204,6 +205,7 @@ class Agent:
                     next_idx[0] += 1
                 i, name, args, label = jobs[k]
                 self.progress.event(f"  [실행] {label}")
+                self.progress.tool_start(name, args, label)
                 result, elapsed = self._execute(name, args)
                 results[i] = result
                 self.progress.result(label, result, elapsed)

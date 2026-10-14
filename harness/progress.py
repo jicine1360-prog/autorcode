@@ -154,3 +154,12 @@ class Progress:
         if len(lines) > count:
             self.event(f"    └ … {len(lines) - count}줄 더 있음" +
                        ("" if self.details else " (--details로 더 보기)"))
+
+    def tool_start(self, name, args, label):
+        """도구 실행 직전 훅 — 기본은 아무것도 하지 않는다.
+
+        GUI/TUI 는 이 훅을 재정의해 도구 이름·인자로 카드나 diff 를 그린다.
+        스트림(파이프/로그) 모드의 출력은 기존 event/result 흐름만으로 충분하므로
+        기반 Progress 는 무음으로 둔다.
+        """
+        return None

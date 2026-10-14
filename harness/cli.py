@@ -120,6 +120,7 @@ HELP_TEXT = """autorcode — 모델 라우팅 + 도구 실행 에이전트 (로�
   autorcode run phi4 --session h.jsonl   히스토리 저장/재개
   autorcode run phi4 --no-session         기본 자동 세션(작업폴더별) 끔
   autorcode chat phi4               도구 없는 단순 채팅
+  autorcode tui [phi4]              전체화면 TUI (opencode 스타일, Textual)
   autorcode doctor                  서버/메모리/GPU 자가진단
 
 GPU 없이 즉시 사용 (OpenRouter — 모델명 '/' 포함)
@@ -133,6 +134,11 @@ GPU 없이 즉시 사용 (OpenRouter — 모델명 '/' 포함)
   진행은 stderr, 최종 답변은 stdout. 원시 추론이나 미완성 JSON은 표시하지 않음
   대화 중 /status /tools /steps on|off /details on|off /help 사용 가능
   업데이트 뒤에는 exit 후 다시 실행해야 새 기능이 적용됨
+
+TUI 모드 (autorcode tui · Textual 필요: pip install 'autorcode[tui]')
+  Enter 전송 · Ctrl+P 팔레트 · F2 모델 · F3 세션 · Ctrl+T 테마 · Ctrl+L 지우기
+  Esc 작업 취소 · Ctrl+Q 종료 · 슬래시: /help /model /sessions /theme /status /tools /clear /auto /quit
+  도구 실행은 카드, 파일 편집은 diff, 승인은 모달로 표시
 
 도구 프로토콜 (네이티브 function calling 우선, 불가능한 서버는 JSON 규식)
   네이티브: OpenAI tools 스키마 전달 → tool_calls 로 도구 호출 (AGENT_NATIVE_TOOLS=0 으로 끔)
@@ -456,6 +462,28 @@ def cmd_chat(args):
         print(f"보조개> {a}\n")
 
 
+def cmd_tui(args) -> int:
+    """전체화면 TUI (Textual) — opencode 스타일 인터페이스.
+
+    기존 run 과 같은 하네스를 쓰되, 진행 상황을 카드/상태바로 그리고
+    승인은 모달로, 파일 편집은 diff 로 보여준다. Textual 은 선택 의존성이다.
+    """
+    config.setup_logging(getattr(args, "verbose", False))
+    from harness import tui
+    model = args.model or ""
+    if model and "/" not in model:
+        resolved = _match_model(model, _names())
+        if resolved:
+            model = resolved
+    if not model:
+        loaded, names = _loaded(), set(_names())
+        pool = loaded | names
+        model = sorted(pool, key=lambda n: (n not in loaded, n))[0] if pool \
+            else config.load().model_fast
+    cfg = _make_cfg(model, args)
+    return tui.run(cfg, model=model)
+
+
 def cmd_bot(args) -> int:
     """폰 비서: 이름 있는 봇 토큰의 폴러 하나로 승인+명령을 처리한다."""
     config.setup_logging(args.verbose)
@@ -512,6 +540,24 @@ def main() -> int:
     p.add_argument("--session", help="히스토리 jsonl")
     p.add_argument("--no-session", action="store_true", help="기본 세션 저장 끔")
     p.set_defaults(fn=cmd_run, cmd="run")
+
+    p = sub.add_parser("tui", help="전체화면 TUI (Textual) — opencode 스타일")
+    p.add_argument("model", nargs="?", default="", help="ollama 모델명 (생략 시 로드/목록 우선)")
+    p.add_argument("--yes", action="store_true", help="승인 자동 (모달 건너뜀)")
+    p.add_argument("--approve", choices=("auto", "telegram", "tty", "deny"), default="auto",
+                   help="승인 경로 (TUI 는 자체 모달 사용 — deny 면 전부 거부)")
+    p.add_argument("--auto", action="store_true", help="자율 모드 — 파괴적 명령만 승인")
+    p.add_argument("--quiet", action="store_true", help="(TUI 에선 무시 — 카드 접기로 대체)")
+    p.add_argument("--details", action="store_true", help="도구 결과 미리보기 확대")
+    p.add_argument("--no-stream", action="store_true", help="SSE 대신 일반 JSON 응답 사용")
+    p.add_argument("--max-tokens", type=int, default=None,
+                   help="응답 최대 출력 토큰 (기본 AGENT_MAX_TOKENS=8192)")
+    p.add_argument("--reasoning-effort", default=None,
+                   help="thinking 모델 추론 제어: none=추론 끔(로컬 기본) · low/medium/high")
+    p.add_argument("--verbose", action="store_true", help="진단 로그 출력")
+    p.add_argument("--session", help="히스토리 jsonl")
+    p.add_argument("--no-session", action="store_true", help="기본 세션 저장 끔")
+    p.set_defaults(fn=cmd_tui, cmd="tui")
 
     p = sub.add_parser("list", help="로컬 모델 목록")
     p.set_defaults(fn=cmd_list)

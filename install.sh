@@ -46,3 +46,12 @@ if ! "$BIN/autorcode" list >/dev/null 2>&1; then
   echo "  curl -fsSL https://ollama.com/install.sh | sh   # ollama 설치"
   echo "  systemctl --user start ollama 2>/dev/null || sudo systemctl start ollama"
 fi
+
+# 5) (선택) TUI — Textual 이 없으면 안내만. 설치는 강제하지 않는다.
+if python3 -c 'import textual' >/dev/null 2>&1; then
+  echo "TUI 준비됨 →  autorcode tui"
+else
+  echo ""
+  echo "[선택] 전체화면 TUI(autorcode tui)를 쓰려면 Textual 설치:"
+  echo "  pip install 'autorcode[tui]'   또는   pip install textual"
+fi

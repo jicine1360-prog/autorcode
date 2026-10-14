@@ -74,6 +74,7 @@ autorcode run phi4 "파일 목록 봐" # 단발 실행 — 부분명(phi4) 자�
 autorcode run phi4               # 대화형 REPL
 autorcode chat phi4              # 도구 없는 단순 채팅
 autorcode run                    # 인자 없음 → 로드된 모델 우선
+autorcode tui                    # 전체화면 TUI (opencode 스타일, Textual 필요)
 ```
 **모델 고정**: `autorcode run <모델>` — 그 실행만 라우터(fast/smart)를 무시하고
 지정 모델 하나로 고정합니다. 기본 fast/smart를 바꾸지 않아도 됩니다.
@@ -328,6 +329,40 @@ autorcode run phi4 "파일 목록 봐" 2>progress.log
 **업데이트 전에 켜둔 REPL은 `exit` 후 다시 실행하세요.** 실행 중인 프로세스에
 새 코드와 도구 목록이 자동 반영되지는 않습니다. 대기 표시는 모델 로딩과 추론 중 어느
 단계인지 추측하지 않으며, 서버가 실제 응답을 보내기 전에는 '모델 응답 대기'로 표시합니다.
+
+## 전체화면 TUI (autorcode tui)
+
+opencode 스타일의 터미널 GUI 모드. 같은 하네스(`run`)를 그대로 쓰되, 진행 상황을
+**상태바 · 도구 카드 · diff · 승인 모달** 로 그린다.
+
+```bash
+pip install 'autorcode[tui]'     # 또는: pip install textual
+autorcode tui                     # 로드된(또는 첫) 모델로 시작
+autorcode tui qwen3.8:27b-bf16    # 모델 지정
+```
+
+- **상태바**: 현재 모델 · 라우팅 티어 · 작업 위치 · 권한 · 현재 스텝
+- **도구 카드**: 도구 이름·인자·상태(완료/실패/거부/시간초과)·경과 시간·결과 미리보기
+  (접기/펼치기). 실패 카드는 자동으로 펼쳐진다.
+- **편집 diff**: `write_file`/`edit_file` 은 컬러 unified diff 로 표시한다
+  (이전 파일 내용 대비, 또는 old/new 문자열 대비)
+- **승인 모달**: 민감 작업은 화면 가운데 모달에서 `승인(y)`/`거부(n)`/Esc
+- **스트리밍 표시**: 모델 응답 대기 중 수신 글자 수를 실시간 갱신(원시 JSON·추론은 숨김)
+
+키:
+
+| 키 | 동작 | 키 | 동작 |
+|---|---|---|---|
+| `Enter` | 전송 | `F2` | 모델 선택기 |
+| `Ctrl+P` | 커맨드 팔레트 | `F3` | 세션/히스토리 브라우저 |
+| `Ctrl+T` | 테마 전환 | `Ctrl+L` | 화면 지우기 |
+| `Esc` | 현재 작업 취소 | `Ctrl+Q` | 종료 |
+
+슬래시 명령: `/help` `/model` `/sessions` `/theme` `/status` `/tools` `/clear`
+`/auto on|off` `/quit`
+
+> Textual 은 **선택 의존성**이다. 없으면 `autorcode tui` 는 설치 안내와 함께 종료하고,
+> 나머지 CLI(`run`/`chat`/`bot` 등)는 표준 라이브러리만으로 그대로 동작한다.
 
 ## 동작 구조
 `판단(LLM) ↔ tool_calls 프로토콜(네이티브, 폴백 시 JSON) ↔ 하네스(도구 실행/권한/샌드박스)`
