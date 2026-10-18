@@ -44,8 +44,18 @@ class TestSafety(unittest.TestCase):
 class TestPermissions(unittest.TestCase):
     def test_whitelist(self):
         self.assertEqual(permissions.check_bash("ls -la", "balanced")[0], "allow")
+        self.assertEqual(permissions.check_bash("cd /mnt/usb4tb && ls", "balanced")[0], "allow")
+        self.assertEqual(permissions.check_bash("echo $(date)", "balanced")[0], "allow")
+        self.assertEqual(permissions.check_bash("cd ~/.ssh", "balanced")[0], "deny")
         self.assertEqual(permissions.check_bash("rm ./a", "balanced")[0], "confirm")
-        self.assertEqual(permissions.check_bash("unknownbin", "balanced")[0], "deny")
+        # 화이트리스트 밖 = 즉시 거부가 아니라 사용자 승인 게이트로 (승인창이 떠야 한다)
+        decision, why = permissions.check_bash("unknownbin", "balanced")
+        self.assertEqual(decision, "confirm")
+        self.assertIn("화이트리스트 밖", why)
+        self.assertEqual(permissions.check_bash("unknownbin", "strict")[0], "confirm")
+        # 단 파괴적 패턴이 섞인 화이트리스트 밖 명령은 승인으로도 불가
+        self.assertEqual(permissions.check_bash("shutdown now", "balanced")[0], "deny")
+        self.assertEqual(permissions.check_bash("unknownbin; shutdown now", "balanced")[0], "deny")
         self.assertEqual(permissions.check_bash("unknownbin", "yolo")[0], "allow")
 
     def test_risky_flags(self):
@@ -196,6 +206,22 @@ class TestAgentLoop(unittest.TestCase):
         out = Agent(self._cfg()).run("비밀파일 읽기")
         self.assertIn("거부", out)
 
+    def test_unknown_bin_asks_user(self):
+        """화이트리스트 밖 명령은 '무승인 즉시 거부'가 아니라 승인창을 띄우고, 승인 시 실행된다."""
+        _Handler.content = staticmethod(lambda obs, b: (
+            json.dumps({"done": True, "answer": "승인 실행"}) if obs else
+            json.dumps({"tool": "bash", "args": {"command": "mytool --version"}})))
+        asked = []
+
+        def confirmer(why):
+            asked.append(why)
+            return True
+
+        out = Agent(self._cfg(), confirmer=confirmer).run("승인 확인")
+        self.assertEqual(len(asked), 1)
+        self.assertIn("화이트리스트 밖", asked[0])
+        self.assertIn("승인 실행", out)
+
     def test_native_tool_calls_round(self):
         """네이티브 tool_calls → assistant(tc)+role:tool 시퀀스 보존 → done."""
         seen = {}
@@ -218,6 +244,59 @@ class TestAgentLoop(unittest.TestCase):
         self.assertIn("네이티브 완료", out)
         self.assertIn("2스텝", out)
         self.assertEqual(seen["pair"], (True, True))
+
+    def test_repeat_call_nudges_then_continues(self):
+        """같은 호출 반복은 작업을 죽이지 않고 교정 안내(도구결과)+지시(사용자)를 넣고 계속한다."""
+        n = {"calls": 0, "nudged": 0, "steered": 0}
+        def content(obs, b):
+            n["calls"] += 1
+            if n["calls"] <= 4:          # 3번째부터는 실행 생략, 4번째도 교정(2회)까지는 계속
+                return json.dumps({"tool": "bash", "args": {"command": "echo XREPEAT"}})
+            n["nudged"] = sum("이번 호출은 실행하지 않았" in str(m.get("content", ""))
+                              for m in b["messages"])
+            n["steered"] = sum("[시스템 지시]" in str(m.get("content", "")) for m in b["messages"])
+            return json.dumps({"done": True, "answer": "반복 후 완료"})
+        _Handler.content = staticmethod(content)
+        out = Agent(self._cfg(repeat_limit=3, max_iterations=8)).run("반복 확인")
+        self.assertIn("반복 후 완료", out)
+        self.assertIn("5스텝", out)
+        self.assertNotIn("[중단]", out)
+        self.assertEqual(n["nudged"], 2)     # 신뢰 채널 지시가 매번 함께 전달된다
+        self.assertEqual(n["steered"], 2)
+
+    def test_repeat_call_aborts_when_nudge_ignored(self):
+        """교정 안내를 두 번 무시하고 또 반복하면 그때만 중단한다."""
+        _Handler.content = staticmethod(lambda obs, b: json.dumps(
+            {"tool": "bash", "args": {"command": "echo XSTUBBORN"}}))
+        out = Agent(self._cfg(repeat_limit=3, max_iterations=10)).run("무시 확인")
+        self.assertIn("[중단]", out)
+        self.assertIn("교정 안내 무시", out)
+
+    def test_repeat_native_nudge_and_continue(self):
+        """네이티브 tool_calls 경로도 반복 시 실행 생략 + 지시 후 계속한다."""
+        n = {"calls": 0, "nudged": 0, "steered": 0}
+        def content(obs, b):
+            n["calls"] += 1
+            if n["calls"] <= 4:
+                return {"content": "", "tool_calls": [{
+                    "id": f"call_r{n['calls']}", "type": "function",
+                    "function": {"name": "bash",
+                                 "arguments": json.dumps({"command": "echo XNATIVE"})}}]}
+            n["nudged"] = sum(m.get("role") == "tool" and "이번 호출은 실행하지 않았" in str(m.get("content", ""))
+                              for m in b["messages"])
+            n["steered"] = sum(m.get("role") == "user" and "[시스템 지시]" in str(m.get("content", ""))
+                               for m in b["messages"])
+            return {"content": "", "tool_calls": [{
+                "id": "call_done", "type": "function",
+                "function": {"name": "done",
+                             "arguments": json.dumps({"answer": "네이티브 반복 후 완료"})}}]}
+        _Handler.content = staticmethod(content)
+        out = Agent(self._cfg(repeat_limit=3, max_iterations=8)).run("네이티브 반복")
+        self.assertIn("네이티브 반복 후 완료", out)
+        self.assertIn("5스텝", out)
+        self.assertNotIn("[중단]", out)
+        self.assertEqual(n["nudged"], 2)
+        self.assertEqual(n["steered"], 2)
 
 
 class TestLLMToolsFallback(unittest.TestCase):

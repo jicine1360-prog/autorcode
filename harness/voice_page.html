@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101418">
+<title>스트라타 음성방</title>
+<style>
+  :root { --bg:#101418; --card:#1a2027; --me:#2b6cb0; --ai:#232b34; --dim:#8b98a5; --ok:#38a169; --bad:#e53e3e; --call:#805ad5; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:var(--bg); color:#e6edf3;
+    font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif; }
+  #app { display:flex; flex-direction:column; height:100dvh; max-width:760px; margin:0 auto; }
+  header { display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid #232b34; }
+  header h1 { font-size:16px; margin:0; flex:1; }
+  #dot { width:10px; height:10px; border-radius:50%; background:var(--bad); }
+  #dot.on { background:var(--ok); }
+  #hint { color:var(--dim); font-size:12px; }
+  #hint.live { color:#f6e05e; }
+  #log { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:8px; scroll-behavior:smooth; }
+  .b { max-width:86%; padding:9px 12px; border-radius:14px; white-space:pre-wrap; word-break:break-word; }
+  .u { align-self:flex-end; background:var(--me); border-bottom-right-radius:4px; }
+  .a { align-self:flex-start; background:var(--ai); border-bottom-left-radius:4px; }
+  .who { font-size:11px; color:var(--dim); margin-bottom:2px; }
+  .typing { color:var(--dim); font-style:italic; }
+  footer { padding:10px 12px calc(12px + env(safe-area-inset-bottom)); border-top:1px solid #232b34;
+    display:grid; grid-template-columns:1fr auto auto; gap:8px; align-items:center; }
+  #text { padding:12px; border-radius:12px; border:1px solid #2d3742; background:#161c22; color:inherit; font-size:16px; min-width:0; }
+  #send { padding:12px 16px; border-radius:12px; border:0; background:var(--me); color:#fff; font-size:16px; }
+  #talk { grid-column:1 / -1; margin-top:2px; padding:16px; border-radius:16px; border:0;
+    background:#26303a; color:#fff; font-size:17px; font-weight:600; touch-action:none; user-select:none; }
+  #talk.rec { background:var(--bad); }
+  #call { grid-column:1 / -1; margin-top:2px; padding:16px; border-radius:16px; border:0;
+    background:var(--call); color:#fff; font-size:17px; font-weight:600; }
+  #call.on { background:var(--bad); animation:pulse 1.6s infinite; }
+  @keyframes pulse { 50% { opacity:.72; } }
+  #talk:disabled { opacity:.45; }
+  .row { display:flex; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <span id="dot"></span>
+    <h1>스트라타 음성방</h1>
+    <span id="hint"></span>
+  </header>
+  <div id="log"></div>
+  <footer>
+    <input id="text" placeholder="글로도 말할 수 있어요" autocomplete="off">
+    <button id="send">보내기</button>
+    <button id="talk">🎤 누르고 말하기</button>
+    <button id="call">📞 통화 시작 — 핸즈프리 (말하면 AI가 끊겨요)</button>
+  </footer>
+</div>
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const log = $("#log"), dot = $("#dot"), hint = $("#hint"), talk = $("#talk");
+  const textIn = $("#text"), sendBtn = $("#send"), callBtn = $("#call");
+  let ws = null, backoff = 500, liveA = null, recorder = null, chunks = [], recording = false;
+  let audioQueue = [], playing = false, unlocked = false, curAudio = null;
+  let callOn = false, micStream = null, actx = null, node = null, srcNode = null, txAcc = [];
+  const myWho = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent) ? "폰" : "PC";
+
+  const secure = window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1";
+  if (!navigator.mediaDevices || !secure) {
+    hint.textContent = "마이크는 HTTPS 필요 · 글자 대화는 가능";
+    talk.disabled = true; callBtn.disabled = true;
+  }
+
+  function bubble(cls, who, html) {
+    const div = document.createElement("div");
+    div.className = "b " + cls;
+    if (who) { const w = document.createElement("div"); w.className = "who"; w.textContent = who; div.appendChild(w); }
+    const body = document.createElement("div");
+    body.textContent = html;
+    div.appendChild(body);
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+    return body;
+  }
+
+  function setHint(t, live) { hint.textContent = t || ""; hint.className = live ? "live" : ""; }
+
+  function connect() {
+    ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+    ws.onopen = () => {
+      dot.classList.add("on"); backoff = 500;
+      ws.send(JSON.stringify({ type: "who", who: myWho }));
+    };
+    ws.onclose = () => {
+      dot.classList.remove("on"); stopAudio();
+      setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 8000);
+    };
+    ws.onerror = () => { try { ws.close(); } catch (_) {} };
+    ws.onmessage = (e) => {
+      let m; try { m = JSON.parse(e.data); } catch (_) { return; }
+      if (m.type === "state") {
+        log.innerHTML = "";
+        (m.history || []).forEach((h) => {
+          bubble(h.role === "assistant" ? "a" : "u", h.who || (h.role === "assistant" ? "AI" : ""), h.text);
+        });
+      } else if (m.type === "user") {
+        liveA = null;
+        bubble("u", m.who || "", m.text);
+      } else if (m.type === "ai_delta" || m.type === "bot_delta") {
+        const who = m.who || "AI";
+        if (liveA && liveA.dataset.who !== who) liveA = null;
+        if (!liveA) {
+          liveA = bubble("a", who, "");
+          liveA.dataset.who = who;
+        }
+        liveA.textContent += m.text;
+        liveA.parentElement.classList.remove("typing");
+        log.scrollTop = log.scrollHeight;
+      } else if (m.type === "ai" || m.type === "bot") {
+        const who = m.who || "AI";
+        if (liveA && liveA.textContent !== m.text) liveA.textContent = m.text;
+        else if (!liveA) bubble("a", who, m.text);
+        liveA = null;
+        if (m.audio) enqueueAudio(m.audio);
+      } else if (m.type === "duet") {
+        if (m.state === "start") setHint("🤖 " + (m.bot || "봇") + " 와 로이 대화 중 — " + (m.topic || ""), true);
+        else if (callOn) setHint("듣는 중…"); else setHint("");
+      } else if (m.type === "duet_turn") {
+        if (m.who) setHint("🗣 " + m.who + " 생각 중…", true);
+      } else if (m.type === "interrupt") {
+        stopAudio();
+      } else if (m.type === "vad") {
+        if (m.speaking) {
+          if (callOn) setHint("🗣 " + (m.who || "") + " 말하는 중…", true);
+          stopAudio();
+        } else if (callOn) {
+          setHint("듣는 중…");
+        }
+      } else if (m.type === "status") {
+        if (m.text.includes("생각")) {
+          liveA = bubble("a", "AI", "…");
+          liveA.parentElement.classList.add("typing");
+        }
+      }
+    };
+  }
+
+  function say(t) {
+    t = (t || "").trim();
+    if (!t) return;
+    if (t.startsWith("/duet")) {
+      const rest = t.slice(5).trim();
+      const msg = rest && rest !== "stop"
+        ? { type: "duet", topic: rest }
+        : { type: "duet", stop: true };
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+      else fetch("/duet", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(msg) }).catch(() => {});
+      if (msg.stop) setHint("");
+      return;
+    }
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "say", text: t, who: myWho }));
+    else fetch("/say", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: t, who: myWho }) }).catch(() => {});
+  }
+
+  function enqueueAudio(url) {
+    audioQueue.push(url);
+    if (!playing) playNext();
+  }
+  function playNext() {
+    const url = audioQueue.shift();
+    if (!url) { playing = false; curAudio = null; if (callOn) setHint("듣는 중…"); return; }
+    playing = true;
+    const a = new Audio(url);
+    curAudio = a;
+    if (callOn) setHint("🔊 답변 재생 중 — 말하면 끊어져요", true);
+    a.onended = a.onerror = () => playNext();
+    a.play().catch(() => playNext());
+  }
+  function stopAudio() {
+    audioQueue = [];
+    if (curAudio) { try { curAudio.pause(); } catch (_) {} curAudio = null; }
+    playing = false;
+    if (callOn) setHint("듣는 중…");
+  }
+  function unlockAudio() {
+    if (unlocked) return;
+    unlocked = true;
+    const a = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=");
+    a.play().catch(() => {});
+  }
+
+  /* ---- PTT (한 덩어리 녹음 → /stt) ---- */
+  function blobType() {
+    for (const t of ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) return t;
+    }
+    return "";
+  }
+  async function startRec() {
+    if (recording || talk.disabled || callOn) return;
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+    catch (e) { hint.textContent = "마이크 권한이 필요해요"; return; }
+    const type = blobType();
+    recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+    chunks = [];
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+      if (blob.size < 1200) { setHint("너무 짧았어요"); return; }
+      setHint("듣는 중…");
+      try {
+        const r = await fetch("/stt?who=" + encodeURIComponent(myWho), { method: "POST", body: blob,
+          headers: { "Content-Type": blob.type || "application/octet-stream" } });
+        const j = await r.json();
+        setHint(j.ok ? "" : "못 알아들었어요");
+      } catch (_) { setHint("전송 실패"); }
+    };
+    recorder.start();
+    recording = true;
+    talk.classList.add("rec");
+    talk.textContent = "🎙 말하는 중… (떼면 전송)";
+  }
+  function stopRec() {
+    if (!recording) return;
+    recording = false;
+    talk.classList.remove("rec");
+    talk.textContent = "🎤 누르고 말하기";
+    try { recorder.stop(); } catch (_) {}
+  }
+
+  /* ---- 통화(풀 듀플렉스) — 마이크를 0.1초 조각으로 계속 전송 ---- */
+  function resampleTo16k(input, inRate) {
+    if (inRate === 16000) return input;
+    const ratio = 16000 / inRate;
+    const outLen = Math.round(input.length * ratio);
+    const out = new Float32Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      const pos = i / ratio, i0 = Math.floor(pos), i1 = Math.min(i0 + 1, input.length - 1);
+      out[i] = input[i0] + (input[i1] - input[i0]) * (pos - i0);
+    }
+    return out;
+  }
+  async function startCall() {
+    if (callOn || callBtn.disabled) return;
+    unlockAudio();
+    try { micStream = await navigator.mediaDevices.getUserMedia({ audio: {
+      echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
+    catch (e) { setHint("마이크 권한이 필요해요"); return; }
+    try { actx = new AudioContext({ sampleRate: 16000 }); } catch (_) { actx = new AudioContext(); }
+    if (actx.state === "suspended") { try { await actx.resume(); } catch (_) {} }
+    srcNode = actx.createMediaStreamSource(micStream);
+    node = actx.createScriptProcessor(2048, 1, 1);  // 2의 거듭제곱만 허용
+    txAcc = [];
+    node.onaudioprocess = (e) => {
+      if (!callOn || !ws || ws.readyState !== 1) return;
+      const f32 = resampleTo16k(e.inputBuffer.getChannelData(0), actx.sampleRate);
+      let need = 1600 - txAcc.length;
+      let off = 0;
+      if (need <= f32.length) {
+        while (off < f32.length) {
+          const take = Math.min(need, f32.length - off);
+          for (let i = 0; i < take; i++) txAcc.push(f32[off + i]);
+          off += take; need = 1600 - txAcc.length;
+          if (txAcc.length === 1600) {
+            const pcm = new Int16Array(1600);
+            for (let i = 0; i < 1600; i++) {
+              const v = Math.max(-1, Math.min(1, txAcc[i]));
+              pcm[i] = v < 0 ? v * 32768 : v * 32767;
+            }
+            ws.send(pcm.buffer);
+            window.__vhub_tx = (window.__vhub_tx || 0) + 1600;
+            txAcc = []; need = 1600;
+          }
+        }
+      } else {
+        for (let i = 0; i < f32.length; i++) txAcc.push(f32[i]);
+      }
+    };
+    srcNode.connect(node);
+    node.connect(actx.destination);
+    callOn = true;
+    callBtn.classList.add("on");
+    callBtn.textContent = "📵 통화 중 — 터치하면 종료";
+    setHint("듣는 중…");
+  }
+  function stopCall() {
+    if (!callOn) return;
+    callOn = false;
+    callBtn.classList.remove("on");
+    callBtn.textContent = "📞 통화 시작 — 핸즈프리 (말하면 AI가 끊겨요)";
+    try { node && node.disconnect(); } catch (_) {}
+    try { srcNode && srcNode.disconnect(); } catch (_) {}
+    try { micStream && micStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+    try { actx && actx.close(); } catch (_) {}
+    node = srcNode = actx = micStream = null;
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "call", on: false }));
+    setHint("");
+    stopAudio();
+  }
+
+  talk.addEventListener("pointerdown", (e) => { e.preventDefault(); unlockAudio(); startRec(); });
+  talk.addEventListener("pointerup", (e) => { e.preventDefault(); stopRec(); });
+  talk.addEventListener("pointercancel", stopRec);
+  talk.addEventListener("pointerleave", stopRec);
+  talk.addEventListener("contextmenu", (e) => e.preventDefault());
+  callBtn.addEventListener("click", () => { callOn ? stopCall() : startCall(); });
+
+  sendBtn.addEventListener("click", () => { unlockAudio(); say(textIn.value); textIn.value = ""; });
+  textIn.addEventListener("keydown", (e) => { if (e.key === "Enter") { unlockAudio(); say(textIn.value); textIn.value = ""; } });
+
+  connect();
+})();
+</script>
+</body>
+</html>

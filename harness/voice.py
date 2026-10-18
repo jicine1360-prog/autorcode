@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import glob
 import logging
+import json
 import os
 import shutil
 import subprocess
@@ -48,16 +49,38 @@ def _default_runner(argv, timeout):
     return r.returncode, (r.stderr or "")
 
 
+STT_URL = os.getenv("AUTORCODE_STT_URL", "http://127.0.0.1:8140/transcribe")
+
+
+def _stt_server(path: str, timeout: int) -> Optional[str]:
+    """상주 whisper 서버(GPU, large-v3-turbo)로 전사. 실패 시 None."""
+    import urllib.request
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        req = urllib.request.Request(STT_URL, data=data,
+                                     headers={"Content-Type": "application/octet-stream"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8", "replace"))
+        text = (body.get("text") or "").strip()
+        return text if text else None
+    except Exception:
+        log.debug("STT 서버 전사 실패, CLI 폴백", exc_info=True)
+        return None
+
 def transcribe(path: str, model: str = "", timeout: int = 180,
                runner: Optional[Callable] = None) -> str:
     """음성 파일(ogg/wav/mp3...) → 인식 텍스트. 실패는 '[오류] ...' 문자열."""
     audio = os.path.expanduser(str(path or "").strip())
     if not os.path.isfile(audio):
         return f"[오류] 음성 파일을 찾지 못했습니다: {audio}"
+    srv = _stt_server(audio, timeout)
+    if srv is not None:
+        return srv
     whisper = _bin()
     if not whisper:
-        return ("[오류] whisper CLI 가 없어요 — pip install openai-whisper 후 "
-                "AUTORCODE_WHISPER_BIN 설정")
+        return ("[오류] 상주 STT 서버(" + STT_URL + ") 응답 없고 whisper CLI 도 없어요 — "
+                "stt_server 실행 상태나 AUTORCODE_WHISPER_BIN 을 확인하세요")
     model = (model or DEFAULT_MODEL).strip()
     outdir = tempfile.mkdtemp(prefix="autorcode-stt-")
     stem = os.path.splitext(os.path.basename(audio))[0]

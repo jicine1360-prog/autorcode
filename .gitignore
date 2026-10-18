@@ -7,3 +7,4 @@ hello.txt
 .env
 .venv/
 autorcode/
+autorcode.egg-info/

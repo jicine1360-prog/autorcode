@@ -63,6 +63,9 @@ class StreamingTests(unittest.TestCase):
         self.assertEqual(json.loads(results[0].content)["answer"], "안녕")
         self.assertEqual(events[-1][1], len(results[0].content))
         self.assertNotIn("INTERNAL_NOT_DISPLAYED", str(events) + str(results))
+        # 실시간 표시용 조각(delta)이 순서대로 다 도착해야 한다
+        deltas = [value for kind, value in events if kind == "delta"]
+        self.assertEqual("".join(deltas), results[0].content)
 
     def test_incomplete_stream_and_length_limit(self):
         for data in (

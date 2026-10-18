@@ -23,13 +23,17 @@ Args = Dict[str, object]
 ToolFn = Callable[[Args, str, int, int], str]
 
 
-def _cap(text: str, limit: int) -> str:
-    if len(text) <= limit:
+def cap_middle(text: str, limit: int) -> str:
+    if limit <= 0 or len(text) <= limit:
         return text
-    keep = limit // 2
+    keep = max(1, limit // 2)
     return (text[:keep]
             + f"\n…[출력 상한 초과, {len(text) - limit}자 생략]…\n"
             + text[-keep:])
+
+
+def _cap(text: str, limit: int) -> str:
+    return cap_middle(text, limit)
 
 
 def _bash(args, root, max_output, timeout):

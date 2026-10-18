@@ -33,6 +33,10 @@ class LengthError(LLMError):
     """출력 토큰 상한에 걸렸지만 회복 가능하다 — 더 짧게 재요청한다."""
 
 
+class ContextOverflowError(LLMError):
+    """프롬프트+출력이 모델 컨텍스트를 초과했다 — 요약/트리밍 후 재시도할 수 있다."""
+
+
 @dataclass
 class Reply:
     content: str
@@ -78,13 +82,13 @@ class OpenAICompatibleLLM:
         self.reasoning_effort = reasoning_effort
 
     def chat(self, messages: List[ChatMessage], model: str, *, stream=False,
-             on_event=None, tools=None) -> Reply:
+             on_event=None, tools=None, max_tokens: Optional[int] = None) -> Reply:
         """tools: OpenAI function 스키마 목록. 서버가 거부하면 tools 없이 재시도."""
         payload = {
             "model": model,
             "messages": messages,
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
+            "max_tokens": int(max_tokens if max_tokens is not None else self.max_tokens),
             "stream": stream,
         }
         if self.reasoning_effort:
@@ -125,6 +129,15 @@ class OpenAICompatibleLLM:
                     payload.pop("tools", None)
                     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
                     continue
+                if e.code == 400 and ("context window" in detail.lower()
+                                      or "maximum context length" in detail.lower()):
+                    # 서버가 알려준 실제 입력 크기를 보존 — 트리밍 예산 계산에 쓴다
+                    m = re.search(r"input_tokens\W{0,3}value=(\d+)", detail)
+                    if not m:
+                        m = re.search(r"contains at least (\d+) input tokens", detail)
+                    if m:
+                        last_err += f" [server_input_tokens={m.group(1)}]"
+                    raise ContextOverflowError(last_err)
                 if e.code in (400, 401, 403, 404):  # 재시도 무의미
                     raise LLMError(last_err)
             except LLMError:
@@ -199,6 +212,7 @@ class OpenAICompatibleLLM:
                 parts.append(content)
                 received += len(content)
                 if on_event:
+                    on_event("delta", content)
                     on_event("received", received)
             tcs = delta.get("tool_calls")
             if isinstance(tcs, list):
@@ -252,7 +266,7 @@ class MockModel:
     [도구 결과] 관측을 하나 받으면 종료한다. 루프 자체는 실제와 동일하게 돈다."""
 
     def chat(self, messages: List[ChatMessage], model: str, *, stream=False,
-             on_event=None, tools=None) -> Reply:
+             on_event=None, tools=None, max_tokens: Optional[int] = None) -> Reply:
         task = None
         observations = 0
         last_obs = ""

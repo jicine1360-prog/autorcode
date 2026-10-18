@@ -151,6 +151,28 @@ class ProgressTests(unittest.TestCase):
         execute.assert_not_called()
         self.assertIn("한 단계 도구 한도", self.output.getvalue())
 
+    def test_stream_deltas_reach_progress_hook(self):
+        """수신 조각(delta)이 text_delta 훅으로, 재시도가 text_reset 훅으로 전달된다."""
+        pieces, resets = [], []
+        self.progress.text_delta = pieces.append
+        self.progress.text_reset = lambda: resets.append(True)
+
+        class Streamer:
+            def chat(self, messages, model, **options):
+                on_event = options.get("on_event")
+                if on_event:
+                    on_event("delta", "안")
+                    on_event("received", 3)
+                    on_event("retry", "API 재시도 2/2")
+                    on_event("delta", "녕")
+                    on_event("received", 6)
+                return Reply(json.dumps({"done": True, "answer": "안녕"}, ensure_ascii=False))
+
+        self.agent.llm = Streamer()
+        self.assertIn("안녕", self.agent.run("test"))
+        self.assertEqual(pieces, ["안", "녕"])
+        self.assertEqual(resets, [True])
+
     def test_parallel_result_visible_in_completion_order(self):
         release_slow, fast_visible = threading.Event(), threading.Event()
         class Output(io.StringIO):

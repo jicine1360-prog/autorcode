@@ -23,6 +23,6 @@ def _cjk_count(text: str) -> int:
 
 def count(text: str) -> int:
     if _enc is not None:
-        return len(_enc.encode(text))
+        return len(_enc.encode(text, disallowed_special=()))
     cjk = _cjk_count(text)
     return int(cjk + (len(text) - cjk) / 3.5) + 1

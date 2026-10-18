@@ -6,6 +6,10 @@
 - strict    : balanced + bash 전체·파일쓰기까지 승인 요구
 
 승인 결정값: ("allow", None) | ("confirm", 사유) | ("deny", 사유)
+confirm은 사용자 승인 게이트(터미널 모달·웹·텔레그램)로 보내고, deny는 승인
+없이 확정 거부다. 화이트리스트 밖 바이너리는 confirm — 사용자가 화면에서
+직접 허용/거부한다(예: ollama). 단 민감 경로·실행 탈출·파괴적 패턴이 섞이면
+화이트리스트 밖이라도 deny — 승인으로도 열리지 않는다.
 deny는 모델에게 오류로 환류되어 스스로 경로를 바꿀 수 있게 힌트를 담는다.
 """
 import os
@@ -13,7 +17,7 @@ import re
 
 ALLOW_BIN = {
     "ls", "cat", "head", "tail", "wc", "sort", "uniq", "cut", "tr", "grep",
-    "rg", "find", "pwd", "date", "echo", "printf", "df", "du", "ps", "stat",
+    "rg", "find", "pwd", "cd", "date", "echo", "printf", "df", "du", "ps", "stat",
     "file", "diff", "which", "whoami", "id", "uname", "uptime", "free", "tree",
     "env", "sed", "awk", "basename", "dirname", "seq", "true", "false", "test",
     "less", "ss", "netstat", "lsof", "nproc", "lsblk", "lscpu", "lspci",
@@ -74,7 +78,9 @@ def check_bash(cmd: str, mode: str):
     tokens0 = [s.strip() for s in _PIPE_SPLIT.split(cmd) if s.strip()]
     if not tokens0:
         return "allow", None
-    firsts = [os.path.basename(s.split()[0]) for s in tokens0]
+    # $(...)·(서브셸) 분해 시 남는 괄호를 제거한다 — 안 지우면 'date)' 가
+    # 화이트리스트 밖으로 오탐되어 승인창이 뜬다.
+    firsts = [os.path.basename(s.split()[0].strip("()")) for s in tokens0]
     if mode == "strict":
         # strict 는 쓰기·상태 변경을 승인으로 막는 모드다. 그런데 읽기 조회까지
         # 매번 텔레그램 승인을 요구하면 원격 관리 에이전트가 상태 조회조차 못
@@ -90,9 +96,13 @@ def check_bash(cmd: str, mode: str):
                 continue
             if b in CONFIRM_BIN:
                 return "confirm", "strict 모드: 상태 변경·쓰기 명령 승인 필요"
-            return ("deny",
-                    f"'{b}'는 화이트리스트 밖 — 허용목록(읽기): {', '.join(sorted(list(ALLOW_BIN)[:12]))}… "
-                    f"필요하면 저술적 도구(read_file/write_file/edit_file)나 승인모드(--yes)를 사용하라")
+            if is_destructive(cmd):
+                return ("deny",
+                        f"'{b}'는 화이트리스트 밖 + 파괴적 패턴 — 승인으로도 허용하지 않는다")
+            return ("confirm",
+                    f"'{b}'는 화이트리스트 밖 — 승인하면 실행합니다. "
+                    f"읽기 허용목록: {', '.join(sorted(list(ALLOW_BIN)[:12]))}… "
+                    f"(민감 경로·파괴적 패턴은 승인으로도 불가)")
         return "allow", None
     for b in firsts:
         if b in _READONLY_BIN:
@@ -102,9 +112,13 @@ def check_bash(cmd: str, mode: str):
         if b in CONFIRM_BIN:
             return "confirm", f"저술적 명령 '{b}' 승인 필요"
         if b not in ALLOW_BIN:
-            return ("deny",
-                    f"'{b}'는 화이트리스트 밖 — 허용목록(읽기): {', '.join(sorted(list(ALLOW_BIN)[:12]))}… "
-                    f"필요하면 저술적 도구(read_file/write_file/edit_file)나 승인모드(--yes)를 사용하라")
+            if is_destructive(cmd):
+                return ("deny",
+                        f"'{b}'는 화이트리스트 밖 + 파괴적 패턴 — 승인으로도 허용하지 않는다")
+            return ("confirm",
+                    f"'{b}'는 화이트리스트 밖 — 승인하면 실행합니다. "
+                    f"읽기 허용목록: {', '.join(sorted(list(ALLOW_BIN)[:12]))}… "
+                    f"(민감 경로·파괴적 패턴은 승인으로도 불가)")
     return "allow", None
 
 

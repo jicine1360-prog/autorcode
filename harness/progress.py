@@ -171,3 +171,15 @@ class Progress:
         모드는 원시 추론을 노출하지 않으므로 기반 Progress 는 아무것도 하지 않는다.
         """
         return None
+
+    def text_delta(self, text):
+        """모델 응답 텍스트 조각이 도착할 때마다 불린다 — 기본은 무음.
+
+        TUI 는 이 훅으로 수신 중인 글자를 실시간으로 로그에 흘린다. 스트림/로그
+        모드는 최종 결과만 보여주므로 기반 Progress 는 아무것도 하지 않는다.
+        """
+        return None
+
+    def text_reset(self):
+        """스트리밍 재시도 등으로 지금까지 받은 조각을 버려야 할 때 — 기본은 무음."""
+        return None

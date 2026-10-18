@@ -3,7 +3,7 @@
 
   python3 agent.py                              # REPL (모의 모드)
   python3 agent.py --provider ollama "ls 해봐"  # 로컬 ollama 무료 사용
-  python3 agent.py --provider ollama --yes "..."# 자동승인(화이트리스트는 유지)
+  python3 agent.py --provider ollama --yes "..."# 자동승인 — 화이트리스트 밖도 자동 승인(민감경로·탈출 제외)
   AGENT_MODEL_FAST=qwen3-coder:30b ...          # 모델 커스텀
 
 openai 전환: AGENT_BASE_URL=https://api.openai.com/v1 AGENT_API_KEY=sk-...

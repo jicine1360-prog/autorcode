@@ -22,9 +22,12 @@ _PRIVATE = re.compile(
 
 
 def _cap(text: str, limit: int) -> str:
-    if len(text) <= limit:
+    if limit <= 0 or len(text) <= limit:
         return text
-    return text[:limit] + f"\n…[상한 {limit}자 초과, {len(text) - limit}자 생략]"
+    keep = max(1, limit // 2)
+    return (text[:keep]
+            + f"\n…[상한 {limit}자 초과, {len(text) - limit}자 생략]…\n"
+            + text[-keep:])
 
 
 def _public_host(url: str) -> str:

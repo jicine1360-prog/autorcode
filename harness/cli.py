@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -75,6 +76,54 @@ def _loaded() -> set:
         return set()
 
 
+# 임베딩 전용 모델은 채팅 자동선택/모델선택기에서 뺀다.
+_EMBED_HINT = re.compile(
+    r"(embed|bge|mxbai|minilm|arctic-embed|gte|jina|voyage|snowflake|"
+    r"text-embedding|e5-|all-minilm)", re.I)
+_cap_cache: dict = {}
+
+
+def _capabilities(name: str, timeout: float = 3):
+    """ollama /api/show 의 capabilities 목록(없으면 None). 결과는 캐시."""
+    if name in _cap_cache:
+        return _cap_cache[name]
+    caps = None
+    try:
+        body = json.dumps({"name": name}).encode("utf-8")
+        req = urllib.request.Request(
+            _host() + "/api/show", data=body,
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            caps = json.loads(r.read().decode("utf-8")).get("capabilities")
+    except Exception:
+        caps = None
+    _cap_cache[name] = caps
+    return caps
+
+
+def _is_chat_model(name: str) -> bool:
+    """채팅 가능한 모델인가 — 임베딩 전용(bge-m3 등)을 걸러낸다."""
+    caps = _capabilities(name)
+    if caps:
+        return "completion" in caps
+    return not _EMBED_HINT.search(name)  # capabilities 미지원 시 이름 패턴 폴백
+
+
+def _chat_names() -> list:
+    """설치된 모델 중 채팅 가능한 것만."""
+    return [n for n in _names() if _is_chat_model(n)]
+
+
+def _auto_pick() -> str:
+    """모델 미지정 시 자동선택 — 로드된 것 우선, 임베딩 제외, 알파벳순."""
+    chat = set(_chat_names())
+    loaded = _loaded() & chat
+    pool = loaded | chat
+    if pool:
+        return sorted(pool, key=lambda n: (n not in loaded, n))[0]
+    return config.load().model_fast
+
+
 def _match_model(arg: str, names: list):
     """arg가 모델 이름인지 판별 — 'phi4'면 'phi4:latest' 매칭, ':' 포함이면 통과."""
     if arg in names:
@@ -111,7 +160,7 @@ HELP_TEXT = """autorcode — 모델 라우팅 + 도구 실행 에이전트 (로�
   autorcode run                     로드된(또는 첫) 모델로 REPL
   autorcode run phi4 "지시"         모델 지정 단발 실행
   autorcode run phi4                그 모델로 REPL
-  autorcode run phi4 --yes          승인 자동 (화이트리스트는 유지)
+  autorcode run phi4 --yes          승인 자동 — 화이트리스트 밖 명령도 자동 승인(민감경로·탈출패턴 제외)
   autorcode run phi4 --quiet        과정 출력 끄기 (기본: 스텝마다 실시간 표시)
   autorcode run phi4 --details      도구 결과 미리보기 확대 (3줄 → 12줄)
   autorcode run phi4 --no-stream    SSE 미지원 서버에 일반 JSON 요청
@@ -137,7 +186,10 @@ GPU 없이 즉시 사용 (OpenRouter — 모델명 '/' 포함)
 
 TUI 모드 (autorcode tui · Textual 필요: pip install 'autorcode[tui]')
   Enter 전송 · Ctrl+P 팔레트 · F2 모델 · F3 세션 · Ctrl+T 테마 · Ctrl+L 지우기
-  Esc 작업 취소 · Ctrl+Q 종료 · 슬래시: /help /model /sessions /theme /status /tools /clear /auto /quit
+  Ctrl+V 그림 첨부(컬러 미리보기 + OCR) · Esc 작업 취소 · Ctrl+Q 종료
+  /voice 음성방 — 폰/PC 브라우저 마이크와 같은 대화(터미널은 자막·타이핑 참여)
+  /duet <주제> 봇끼리 대화 — 로이와 봇이 자동 티키타카 (중단 /duet stop)
+  슬래시: /help /model /sessions /theme /status /tools /clear /auto /pause /resume /cancel /compact /copy /image /voice /duet /quit
   도구 실행은 카드, 파일 편집은 diff, 승인은 모달로 표시
 
 도구 프로토콜 (네이티브 function calling 우선, 불가능한 서버는 JSON 규식)
@@ -362,10 +414,7 @@ def cmd_run(args):
         else:
             model = resolved
     if not model:
-        loaded = _loaded()
-        pool = loaded | set(names)
-        model = sorted(pool, key=lambda n: (n not in loaded, n))[0] if pool \
-            else config.load().model_fast
+        model = _auto_pick()
     cfg = _make_cfg(model, args)
     agent = agent_core.Agent(cfg, confirmer=_confirmer(progress, getattr(args, "approve", "auto")), progress=progress)
     head = f"autorcode run {model}  (권한 {cfg.permissions_mode}{'/auto-yes' if cfg.auto_yes else ''}{'/자율' if getattr(cfg, 'auto_smart', False) else ''})"
@@ -476,10 +525,7 @@ def cmd_tui(args) -> int:
         if resolved:
             model = resolved
     if not model:
-        loaded, names = _loaded(), set(_names())
-        pool = loaded | names
-        model = sorted(pool, key=lambda n: (n not in loaded, n))[0] if pool \
-            else config.load().model_fast
+        model = _auto_pick()
     cfg = _make_cfg(model, args)
     return tui.run(cfg, model=model)
 

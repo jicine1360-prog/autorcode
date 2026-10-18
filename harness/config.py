@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import urllib.request
+from urllib.parse import urlparse
 from dataclasses import dataclass, field
 
 # 실제 ollama에 설치된 모델명이어야 한다. 없는 이름을 넣으면 조용히 pull로
@@ -35,6 +36,9 @@ class Config:
     # --- 루프 가드 ---
     # 0 이하면 무제한(단계 한도 없음). 기본은 무제한 — Esc/Ctrl+C 로 언제든 취소.
     max_iterations: int = int(os.getenv("AGENT_MAX_STEPS", "0"))
+    # 같은 (도구, 인자) 호출이 이 횟수에 닿으면 먼저 실행을 생략하고 교정 안내를 주입한다.
+    # 안내를 무시하고 또 반복할 때만 작업을 중단한다.
+    repeat_limit: int = int(os.getenv("AGENT_REPEAT_LIMIT", "3"))
 
     # --- 도구 하네스 한도 ---
     bash_timeout: int = int(os.getenv("AGENT_BASH_TIMEOUT", "30"))
@@ -43,6 +47,10 @@ class Config:
 
     # --- 컨텍스트 예산(토큰 기준 추정) ---
     context_tokens: int = int(os.getenv("AGENT_CONTEXT_TOKENS", "40000"))
+    context_window: int = int(os.getenv("AGENT_CONTEXT_WINDOW", "32768"))
+    context_margin: int = int(os.getenv("AGENT_CONTEXT_MARGIN", "4096"))
+    summary_max_chars: int = int(os.getenv("AGENT_SUMMARY_MAX_CHARS", "4000"))
+    llm_summary: bool = os.getenv("AGENT_LLM_SUMMARY", "1") == "1"
     memory_file: str = os.getenv("AGENT_MEMORY_FILE", "")
     memory_max_chars: int = int(os.getenv("AGENT_MEMORY_MAX_CHARS", "3000"))
 
@@ -63,6 +71,7 @@ class Config:
 
     # --- 세션 ---
     session_file: str = os.getenv("AGENT_SESSION", "")
+    session_load_turns: int = int(os.getenv("AGENT_SESSION_LOAD_TURNS", "120"))
 
     workspace_root: str = field(
         default_factory=lambda: os.path.realpath(os.getenv("AGENT_WORKSPACE", os.getcwd())))
@@ -98,7 +107,19 @@ def preflight(cfg: Config) -> list[str]:
         ]
     if "127.0.0.1" not in cfg.base_url and "localhost" not in cfg.base_url:
         return []
-    names = installed_models(cfg.base_url)
+    is_ollama = urlparse(cfg.base_url).port == 11434
+    if is_ollama:
+        names = installed_models(cfg.base_url)
+    else:
+        try:
+            req = urllib.request.Request(
+                cfg.base_url.rstrip('/') + '/models',
+                headers={'Authorization': f'Bearer {cfg.api_key}'} if cfg.api_key else {},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                names = [m['id'] for m in json.loads(resp.read()).get('data', [])]
+        except Exception:
+            return [f'[경고] {cfg.base_url} 모델 조회 실패 — 서버 응답/API 키를 확인하세요']
     if names is None:
         return [f"[경고] {cfg.base_url} 에 닿지 않습니다 — ollama 서버가 살아있는지 확인하세요"]
     known = set(names) | {n.split(":", 1)[0] for n in names}
@@ -106,7 +127,7 @@ def preflight(cfg: Config) -> list[str]:
     if missing:
         return [
             f"[오류] 설정된 모델이 설치돼 있지 않습니다: {', '.join(missing)} — "
-            f"ollama pull 하거나 AGENT_MODEL_FAST/AGENT_MODEL_SMART 를 바꾸세요. "
+            f"AGENT_MODEL_FAST/AGENT_MODEL_SMART 를 서버 모델명과 맞추세요. "
             f"설치됨: {', '.join(names) or '(없음)'}"
         ]
     return []
