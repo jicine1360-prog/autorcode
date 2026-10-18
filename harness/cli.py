@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 # 설치 위치(심볼릭링크)에 상관없이 harness 패키지를 찾는다
@@ -136,10 +137,63 @@ def _match_model(arg: str, names: list):
     return arg if ":" in arg else None
 
 
+def _openai_models(base_url: str, api_key: str = "", timeout: float = 5) -> list | None:
+    """OpenAI 호환 GET /v1/models — vLLM 등 ollama 아닌 서버의 모델 목록."""
+    base = (base_url or "").rstrip("/")
+    if not base:
+        return None
+    try:
+        req = urllib.request.Request(f"{base if base.endswith('/v1') else base + '/v1'}/models")
+        if api_key:
+            req.add_header("Authorization", f"Bearer {api_key}")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        items = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(items, list):  # ollama 스타일 응답 등 — OpenAI 규격이 아님
+            return None
+        return [m["id"] for m in items if isinstance(m, dict) and m.get("id")]
+    except Exception:
+        return None
+
+
+def model_catalog(timeout: float = 5) -> list:
+    """선택 가능한 모델 카탈로그 — ollama 먼저, 그다음 AGENT_BASE_URL 서버.
+
+    항목은 {"name", "base_url", "api_key", "source"} — 선택 즉시 그 서버로
+    바로 가도록 백엔드까지 함께 들고 있다(이름만으로는 ollama/원격이 뒤섞여).
+    """
+    catalog, seen = [], set()
+
+    def add(name, base_url, api_key, source):
+        if not name or name in seen:
+            return
+        seen.add(name)
+        catalog.append({"name": name, "base_url": base_url,
+                        "api_key": api_key, "source": source})
+
+    for name in _names():
+        add(name, _host() + "/v1", "ollama", "ollama")
+    custom = os.getenv("AGENT_BASE_URL")
+    if custom:
+        key = os.getenv("AGENT_API_KEY") or ""
+        host = urllib.parse.urlparse(custom).netloc or custom
+        for name in _openai_models(custom, key, timeout) or []:
+            add(name, custom, key or "ollama", host)
+    return catalog
+
+
 def _resolve_backend(model: str):
-    """프로바이더 결정: AGENT_BASE_URL > 모델에 '/' 포함 → OpenRouter > 로컬 ollama."""
-    if os.getenv("AGENT_BASE_URL"):
-        return os.getenv("AGENT_BASE_URL"), os.getenv("AGENT_API_KEY") or "ollama"
+    """프로바이더 결정: AGENT_BASE_URL > 모델에 '/' 포함 → OpenRouter > 로컬 ollama.
+
+    AGENT_BASE_URL 이 있어도 ollama 에 실재하는 로컬 모델이면 ollama 로 보낸다 —
+    셸에 기본 서버를 하나 두고도 'autorcode run <설치모델>'로 ollama 를 섞어 쓰기 위해서다.
+    '/' 포함 모델(OpenRouter 스타일)은 ollama 에 물어 보지 않고 그대로 커스텀으로.
+    """
+    custom = os.getenv("AGENT_BASE_URL")
+    if custom:
+        if "/" not in model and _match_model(model, _names()):
+            return _host() + "/v1", "ollama"
+        return custom, os.getenv("AGENT_API_KEY") or "ollama"
     if "/" in model:
         key = os.getenv("OPENROUTER_API_KEY")
         if not key:
@@ -190,6 +244,8 @@ TUI 모드 (autorcode tui · Textual 필요: pip install 'autorcode[tui]')
   /voice 음성방 — 폰/PC 브라우저 마이크와 같은 대화(터미널은 자막·타이핑 참여)
   /duet <주제> 봇끼리 대화 — 로이와 봇이 자동 티키타카 (중단 /duet stop)
   슬래시: /help /model /sessions /theme /status /tools /clear /auto /pause /resume /cancel /compact /copy /image /voice /duet /quit
+  모델 선택기: ollama 설치분 + OpenAI 호환 서버(GET /v1/models)를 한 목록으로
+    — 선택하면 그 서버 백엔드로 즉시 전환 (AGENT_BASE_URL 기본 서버 포함)
   도구 실행은 카드, 파일 편집은 diff, 승인은 모달로 표시
 
 도구 프로토콜 (네이티브 function calling 우선, 불가능한 서버는 JSON 규식)
@@ -215,6 +271,8 @@ TUI 모드 (autorcode tui · Textual 필요: pip install 'autorcode[tui]')
   MEMORY_FILE(기본 ~/.autorcode/memory.txt) MEMORY_MAX_CHARS(3000)
   SHOW_STEPS(1) SHOW_DETAILS(0) STREAM(1) — 0/1로 표시·스트리밍 설정
   OPENROUTER_API_KEY=sk-or-...  OPENROUTER_MODEL(기본 deepseek/deepseek-chat-v3)
+  ~/.autorcode/env 에 KEY=VALUE 한 줄로 저장 가능 (AGENT_BASE_URL 등 기본 설정)
+    — sh export / systemd Environment 가 항상 우선. API 토큰은 넣지 말 것
 
 유료 API 전환
   AGENT_BASE_URL=https://api.openai.com/v1 AGENT_API_KEY=sk-... \\
@@ -379,7 +437,8 @@ def cmd_run(args):
     progress = Progress(display.show_steps and not args.quiet,
                         display.show_details or args.details)
     with progress.activity("[연결] 로컬 모델 목록 확인"):
-        names = _names()
+        catalog = model_catalog()
+    names = [e["name"] for e in catalog]
     model, prompt = args.model, list(args.prompt or [])
     cloud_key = os.getenv("OPENROUTER_API_KEY")
     custom_base = os.getenv("AGENT_BASE_URL")
@@ -415,6 +474,8 @@ def cmd_run(args):
             model = resolved
     if not model:
         model = _auto_pick()
+        if names and model not in names:  # ollama 기본값이 카탈로그에 없으면(서버만 살아있는 등)
+            model = names[0]             # 실재하는 첫 모델로 — 조용한 404 대신
     cfg = _make_cfg(model, args)
     agent = agent_core.Agent(cfg, confirmer=_confirmer(progress, getattr(args, "approve", "auto")), progress=progress)
     head = f"autorcode run {model}  (권한 {cfg.permissions_mode}{'/auto-yes' if cfg.auto_yes else ''}{'/자율' if getattr(cfg, 'auto_smart', False) else ''})"
@@ -520,13 +581,24 @@ def cmd_tui(args) -> int:
     config.setup_logging(getattr(args, "verbose", False))
     from harness import tui
     model = args.model or ""
+    catalog = model_catalog()
+    names = [e["name"] for e in catalog]
     if model and "/" not in model:
-        resolved = _match_model(model, _names())
+        resolved = _match_model(model, names)
         if resolved:
             model = resolved
     if not model:
         model = _auto_pick()
+        if names and model not in names:  # ollama 기본값이 카탈로그에 없으면(서버만 살아있는 등)
+            model = names[0]             # 실재하는 첫 모델로 — 조용한 404 대신
     cfg = _make_cfg(model, args)
+    # 카탈로그 엔트리의 백엔드를 그대로 쓴다 — 같은 목록에 ollama 와 원격
+    # 서버 모델이 섞여 있으므로 이름만으로 재추론하면 서버가 뒤바뀔 수 있다.
+    entry = next((e for e in catalog if e["name"] == model), None)
+    if entry:
+        cfg.base_url, cfg.api_key = entry["base_url"], entry["api_key"]
+        if _is_local(cfg.base_url) and not getattr(args, "reasoning_effort", None):
+            cfg.reasoning_effort = "none"
     return tui.run(cfg, model=model)
 
 

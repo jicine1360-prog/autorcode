@@ -191,6 +191,10 @@ autorcode tui                     # start with the loaded (or first) model
 autorcode tui qwen3.8:27b-bf16    # pick a model
 ```
 
+- **Model picker (F2 / `/model`)**: shows installed ollama models and models served by
+  an OpenAI-compatible server (`GET /v1/models` — vLLM etc.) in **one list**, with the
+  source (ollama / server address) labelled. Picking one switches the endpoint and key
+  immediately (the `AGENT_BASE_URL` default server is included in the list)
 - **Status bar**: current model · routing tier · workspace · permissions · current step
 - **Tool cards**: tool name/args/status (ok/failed/denied/timeout) · elapsed · result
   preview (collapsible). Failed cards auto-expand.
@@ -242,6 +246,8 @@ AGENT_RLIMIT_MEM_MB(4096) AGENT_RLIMIT_NPROC(128) AGENT_MAX_TOKENS(8192)
 AGENT_REASONING_EFFORT(none)   # thinking models: none·low·medium·high (local default none)
 AGENT_SHOW_STEPS(1) AGENT_SHOW_DETAILS(0) AGENT_STREAM(1) AGENT_NATIVE_TOOLS(1)   # 0/1
 ```
+Put `KEY=VALUE` lines in `~/.autorcode/env` and they are loaded on every start
+(an existing sh export / systemd Environment always wins — **never put API tokens there**).
 Full list: `autorcode help`
 
 ## Development / tests

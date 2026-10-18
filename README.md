@@ -341,6 +341,10 @@ autorcode tui                     # 로드된(또는 첫) 모델로 시작
 autorcode tui qwen3.8:27b-bf16    # 모델 지정
 ```
 
+- **모델 선택기(F2 / `/model`)**: ollama 설치 모델과 OpenAI 호환 서버의 모델
+  (`GET /v1/models` — vLLM 등)을 **한 목록**으로 보여준다. 출처(ollama / 서버 주소)를
+  함께 표시하고, 선택 즉시 그 엔드포인트·키로 백엔드를 전환한다
+  (`AGENT_BASE_URL` 기본 서버도 목록에 포함)
 - **상태바**: 현재 모델 · 라우팅 티어 · 작업 위치 · 권한 · 현재 스텝
 - **도구 카드**: 도구 이름·인자·상태(완료/실패/거부/시간초과)·경과 시간·결과 미리보기
   (접기/펼치기). 실패 카드는 자동으로 펼쳐진다.
@@ -389,6 +393,8 @@ AGENT_RLIMIT_MEM_MB(4096) AGENT_RLIMIT_NPROC(128) AGENT_MAX_TOKENS(8192)
 AGENT_REASONING_EFFORT(none)   # thinking 모델 추론 제어: none·low·medium·high (로컬 기본 none)
 AGENT_SHOW_STEPS(1) AGENT_SHOW_DETAILS(0) AGENT_STREAM(1) AGENT_NATIVE_TOOLS(1)   # 0/1
 ```
+`~/.autorcode/env` 에 `KEY=VALUE` 를 한 줄씩 넣어 두면 실행할 때마다 자동으로 읽는다
+(이미 설정된 sh export / systemd Environment 가 우선 — **API 토큰은 넣지 말 것**).
 전체 목록: `autorcode help`
 
 ## 개발/테스트

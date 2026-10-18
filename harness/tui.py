@@ -448,25 +448,47 @@ def _build_app_classes():
             self.dismiss(False)
 
     class ModelPicker(ModalScreen):
+        """모델 선택기 — 카탈로그 엔트리(이름+백엔드+출처)를 그대로 돌려준다.
+
+        이름만 돌려주면 ollama 모델과 원격 서버 모델이 뒤섞여 있을 때
+        백엔드를 다시 추론해야 하는데, 같은 이름이 두 서버에 있으면 뒤바뀐다.
+        """
         BINDINGS = [Binding("escape", "cancel", "취소")]
 
-        def __init__(self, names, current):
+        def __init__(self, entries, current):
             super().__init__()
-            self.names = names
+            self.entries = entries
             self.current = current
 
         def compose(self) -> ComposeResult:
             with Vertical(classes="dialog"):
-                yield Static("모델 선택 (Enter)", classes="dialog-title")
-                opts = [Option(("● " if n == self.current else "  ") + n, id=n)
-                        for n in self.names]
+                yield Static("모델 선택 (Enter) · Esc 취소", classes="dialog-title")
+                opts = []
+                for i, e in enumerate(self.entries):
+                    mark = "● " if e["name"] == self.current else "  "
+                    label = Text.assemble(
+                        (mark + e["name"], ""),
+                        (f"   {e['source']}", "dim"),
+                    )
+                    opts.append(Option(label, id=str(i)))
                 yield OptionList(*opts, id="models")
 
         def on_mount(self):
-            self.query_one("#models", OptionList).focus()
+            box = self.query_one("#models", OptionList)
+            idx = 0
+            try:
+                idx = next(i for i, e in enumerate(self.entries)
+                           if e["name"] == self.current)
+            except StopIteration:
+                pass
+            box.highlighted = idx  # 기본값은 None — Enter 가 아무것도 고르지 않음
+            box.focus()
 
         def on_option_list_option_selected(self, event: OptionList.OptionSelected):
-            self.dismiss(event.option.id)
+            try:
+                self.dismiss(self.entries[int(event.option.id)])
+            except (TypeError, ValueError, IndexError):
+                self.dismiss(None)
 
         def action_cancel(self):
             self.dismiss(None)
@@ -1404,24 +1426,26 @@ def _build_app_classes():
 
         def action_model_picker(self):
             from harness import cli
-            names = cli._chat_names()
-            if not names:
-                self._notice("모델 목록을 가져올 수 없습니다 (ollama 연결 확인)", "warn")
+            entries = cli.model_catalog()
+            if not entries:
+                self._notice("모델 목록을 가져올 수 없습니다 (ollama/vLLM 서버 연결 확인)", "warn")
                 return
             cur = self.initial_model or self.cfg.model_fast
-            self.push_screen(ModelPicker(names, cur), self._on_model_picked)
+            self.push_screen(ModelPicker(entries, cur), self._on_model_picked)
 
-        def _on_model_picked(self, name):
-            if not name:
+        def _on_model_picked(self, entry):
+            if not entry:
                 return
             from harness import cli
             cfg = self.cfg
-            base_url, api_key = cli._resolve_backend(name)
-            cfg.base_url, cfg.api_key = base_url, api_key
-            cfg.model_fast = cfg.model_smart = name
-            self.initial_model = name
+            cfg.base_url, cfg.api_key = entry["base_url"], entry["api_key"]
+            cfg.model_fast = cfg.model_smart = entry["name"]
+            # 로컬 thinking 모델은 추론이 출력 토큰을 다 삼켜 답이 잘린다.
+            if cli._is_local(cfg.base_url) and not cfg.reasoning_effort:
+                cfg.reasoning_effort = "none"
+            self.initial_model = entry["name"]
             self._build_agent()
-            self._notice(f"모델 변경 → {name}")
+            self._notice(f"모델 변경 → {entry['name']} ({entry['source']})")
             self._refresh_status()
 
         def action_session_picker(self):

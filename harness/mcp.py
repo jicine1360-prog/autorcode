@@ -116,7 +116,7 @@ class StdioClient:
         self.request("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
-            "clientInfo": {"name": "autorcode", "version": "2.1.0"},
+            "clientInfo": {"name": "autorcode", "version": "2.2.0"},
         })
         self.notify("notifications/initialized")
 

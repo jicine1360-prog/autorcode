@@ -3,7 +3,6 @@ import json
 import os
 import sys
 import urllib.request
-from urllib.parse import urlparse
 from dataclasses import dataclass, field
 
 # 실제 ollama에 설치된 모델명이어야 한다. 없는 이름을 넣으면 조용히 pull로
@@ -15,6 +14,36 @@ _OLLAMA_PRESET = {
     "model_fast": os.getenv("AGENT_MODEL_FAST", "qwen3:30b-a3b"),
     "model_smart": os.getenv("AGENT_MODEL_SMART", "qwen3.8:latest"),
 }
+
+
+def _load_env_file(path: str | None = None) -> None:
+    """~/.autorcode/env 를 환경변수로 흡수한다. 이미 설정된 값은 덮지 않는다.
+
+    sh export / systemd Environment 가 항상 우선하므로 setdefault 로만 쓴다.
+    파일은 KEY=VALUE 한 줄에 하나, # 주석과 빈 줄은 무시한다.
+    API 토큰 같은 기밀은 넣지 마라 — 로컬 엔드포인트·컨텍스트 한도 등
+    로컬 설정용 파일이다. 경로는 AUTORCODE_ENV_FILE 로 바꿀 수 있다.
+    """
+    if path is None:
+        path = os.getenv("AUTORCODE_ENV_FILE") or os.path.expanduser("~/.autorcode/env")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip("'\"")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+# Config 의 필드 기본값은 클래스 정의 시점에 env 를 읽어 고정된다.
+# 따라서 파일 흡수는 반드시 그 이전에, import 시 한 번 실행돼야 한다.
+_load_env_file()
 
 
 @dataclass
@@ -87,12 +116,33 @@ def _ollama_base(base_url: str) -> str:
     return base[: -len("/v1")] if base.endswith("/v1") else base
 
 
-def installed_models(base_url: str, timeout: int = 5) -> list[str] | None:
-    """ollama에 pull된 모델명 목록. 서버에 닿지 않으면 None."""
+def _v1_base(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    return base if base.endswith("/v1") else base + "/v1"
+
+
+def installed_models(base_url: str, api_key: str = "", timeout: int = 5) -> list[str] | None:
+    """서버에 설치된 모델명 목록. 못 구하면 None.
+
+    ollama 는 GET /api/tags, OpenAI 호환 서버(vLLM·OpenAI 등)는
+    GET /v1/models 로 물어 본다 — 둘 다 실패해야 못 구한 것이다.
+    """
     try:
         req = urllib.request.Request(f"{_ollama_base(base_url)}/api/tags")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return [m.get("name") for m in json.loads(resp.read()).get("models", [])]
+    except Exception:
+        pass
+    try:
+        req = urllib.request.Request(f"{_v1_base(base_url)}/models")
+        if api_key:
+            req.add_header("Authorization", f"Bearer {api_key}")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+        items = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return None
+        return [m["id"] for m in items if isinstance(m, dict) and m.get("id")]
     except Exception:
         return None
 
@@ -107,27 +157,15 @@ def preflight(cfg: Config) -> list[str]:
         ]
     if "127.0.0.1" not in cfg.base_url and "localhost" not in cfg.base_url:
         return []
-    is_ollama = urlparse(cfg.base_url).port == 11434
-    if is_ollama:
-        names = installed_models(cfg.base_url)
-    else:
-        try:
-            req = urllib.request.Request(
-                cfg.base_url.rstrip('/') + '/models',
-                headers={'Authorization': f'Bearer {cfg.api_key}'} if cfg.api_key else {},
-            )
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                names = [m['id'] for m in json.loads(resp.read()).get('data', [])]
-        except Exception:
-            return [f'[경고] {cfg.base_url} 모델 조회 실패 — 서버 응답/API 키를 확인하세요']
+    names = installed_models(cfg.base_url, cfg.api_key)
     if names is None:
-        return [f"[경고] {cfg.base_url} 에 닿지 않습니다 — ollama 서버가 살아있는지 확인하세요"]
+        return [f"[경고] {cfg.base_url} 에 닿지 않습니다 — ollama/vLLM 서버가 살아있는지 확인하세요"]
     known = set(names) | {n.split(":", 1)[0] for n in names}
     missing = [m for m in (cfg.model_fast, cfg.model_smart) if m and m not in known]
     if missing:
         return [
             f"[오류] 설정된 모델이 설치돼 있지 않습니다: {', '.join(missing)} — "
-            f"AGENT_MODEL_FAST/AGENT_MODEL_SMART 를 서버 모델명과 맞추세요. "
+            f"모델을 설치(ollama pull)하거나 AGENT_MODEL_FAST/AGENT_MODEL_SMART 를 서버 모델명과 맞추세요. "
             f"설치됨: {', '.join(names) or '(없음)'}"
         ]
     return []
