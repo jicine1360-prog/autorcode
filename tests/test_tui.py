@@ -15,6 +15,13 @@ try:
 except ImportError:
     HAS_TEXTUAL = False
 
+try:
+    import PIL    # noqa: F401
+    import rich   # noqa: F401
+    HAS_IMAGE_PREVIEW = True
+except ImportError:
+    HAS_IMAGE_PREVIEW = False
+
 
 def _cfg(auto_yes=True):
     from harness.config import Config
@@ -333,8 +340,32 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any("🔊 건우: 저는 김치찌개요" in t for t in texts))
             self.assertTrue(any("봇 대화 끝" in t for t in texts))
 
+    async def test_model_picker_select_switches_backend(self):
+        """선택한 엔트리의 백엔드(엔드포인트·키)가 그대로 cfg 로 반영돼야 한다."""
+        from unittest.mock import patch
+        entries = [{"name": "qwen3.6-35b-nvfp4",
+                    "base_url": "http://127.0.0.1:8000/v1",
+                    "api_key": "dummy", "source": "127.0.0.1:8000"}]
+        app = await self._app()
+        with patch("harness.cli.model_catalog", return_value=entries):
+            async with app.run_test(size=(100, 32)) as pilot:
+                await pilot.pause(0.3)
+                app.action_model_picker()
+                await pilot.pause(0.2)
+                self.assertEqual(type(app.screen).__name__, "ModelPicker")
+                await pilot.press("enter")
+                await pilot.pause(0.3)
+                self.assertEqual(app.cfg.base_url, "http://127.0.0.1:8000/v1")
+                self.assertEqual(app.cfg.api_key, "dummy")
+                self.assertEqual(app.cfg.model_fast, "qwen3.6-35b-nvfp4")
+                self.assertEqual(app.initial_model, "qwen3.6-35b-nvfp4")
+                notices = [str(c.render()) for c in app.query_one("#log").children
+                           if type(c).__name__ == "Notice"]
+                self.assertTrue(any("모델 변경" in n for n in notices))
 
-ONE_PX_PNG = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGA"
+
+ONE_PX_PNG = (
+"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGA"
               "hKmMIQAAAABJRU5ErkJggg==")
 
 
@@ -370,6 +401,7 @@ class ImageAttachHelperTests(unittest.TestCase):
                     self.assertEqual(fh.read(), png)
                 self.assertTrue(path.endswith(".png"))
 
+    @unittest.skipUnless(HAS_IMAGE_PREVIEW, "Pillow/rich 미설치")
     def test_image_block_text_draws_half_blocks(self):
         import base64
         from harness import tui
@@ -380,26 +412,3 @@ class ImageAttachHelperTests(unittest.TestCase):
             text = tui.image_block_text(p, 10, 4)
             self.assertIsNotNone(text)
             self.assertIn("▀", str(text))
-
-    async def test_model_picker_select_switches_backend(self):
-        """선택한 엔트리의 백엔드(엔드포인트·키)가 그대로 cfg 로 반영돼야 한다."""
-        from unittest.mock import patch
-        entries = [{"name": "qwen3.6-35b-nvfp4",
-                    "base_url": "http://127.0.0.1:8000/v1",
-                    "api_key": "dummy", "source": "127.0.0.1:8000"}]
-        app = await self._app()
-        with patch("harness.cli.model_catalog", return_value=entries):
-            async with app.run_test(size=(100, 32)) as pilot:
-                await pilot.pause(0.3)
-                app.action_model_picker()
-                await pilot.pause(0.2)
-                self.assertEqual(type(app.screen).__name__, "ModelPicker")
-                await pilot.press("enter")
-                await pilot.pause(0.3)
-                self.assertEqual(app.cfg.base_url, "http://127.0.0.1:8000/v1")
-                self.assertEqual(app.cfg.api_key, "dummy")
-                self.assertEqual(app.cfg.model_fast, "qwen3.6-35b-nvfp4")
-                self.assertEqual(app.initial_model, "qwen3.6-35b-nvfp4")
-                notices = [str(c.render()) for c in app.query_one("#log").children
-                           if type(c).__name__ == "Notice"]
-                self.assertTrue(any("모델 변경" in n for n in notices))
