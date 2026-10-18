@@ -19,20 +19,20 @@ from harness.voicehub import Config, Hub, Room, StreamVAD, make_app
 
 
 def _sine(ms, freq=440.0, amp=0.4, rate=16000):
-    import numpy as np
+    import math
     n = int(rate * ms / 1000)
-    t = np.arange(n) / rate
-    return (np.sin(2 * np.pi * freq * t) * amp).astype(np.float32)
+    return [math.sin(2 * math.pi * freq * (i / rate)) * amp for i in range(n)]
 
 
 def _silence(ms, rate=16000):
-    import numpy as np
-    return np.zeros(int(rate * ms / 1000), dtype=np.float32)
+    return [0.0] * int(rate * ms / 1000)
 
 
 def _pcm_bytes(frames):
-    import numpy as np
-    return (np.concatenate(frames) * 32767).astype(np.int16).tobytes()
+    import array
+    flat = [v for f in frames for v in f]
+    a = array.array("h", (int(max(-1.0, min(1.0, v)) * 32767) for v in flat))
+    return a.tobytes()
 
 
 class StreamVADTests(unittest.TestCase):

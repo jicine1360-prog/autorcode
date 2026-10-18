@@ -63,8 +63,49 @@ import wave
 from collections import OrderedDict
 from pathlib import Path
 
-import numpy as np
-from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
+try:  # numpy 는 선택 가속 — 없어도 표준 array 로 같은 계산을 한다 (autorcode 무설치 원칙)
+    import numpy as np
+except ImportError:
+    np = None
+
+import array as _array
+import math as _math
+
+
+def _f32_from_pcm(pcm: bytes):
+    """int16 PCM 바이트 → float32 프레임 시퀀스 ([-1,1))."""
+    if np is not None:
+        return np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+    a = _array.array("h")
+    a.frombytes(pcm[: len(pcm) - (len(pcm) % 2)])
+    return [v / 32768.0 for v in a]
+
+
+def _f32_concat(frames) -> list:
+    out: list = []
+    for f in frames:
+        out.extend(f)
+    return out
+
+
+def _f32_to_pcm16(seg) -> bytes:
+    if np is not None:
+        return (np.clip(seg, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+    a = _array.array("h", (max(-1.0, min(1.0, v)) * 32767 for v in seg))
+    return a.tobytes()
+
+
+def _rms(frame) -> float:
+    if not len(frame):
+        return 0.0
+    if np is not None:
+        return float(np.sqrt(np.mean(np.asarray(frame, dtype=np.float32) ** 2)))
+    return _math.sqrt(sum(v * v for v in frame) / len(frame))
+try:  # aiohttp 는 허브 서버(web)에만 필요 — 없어도 Config/Room/StreamVAD 는 동작 (무설치 원칙)
+    from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
+    HAS_AIOHTTP = True
+except ImportError:
+    HAS_AIOHTTP = False
 
 DEFAULT_SYSTEM = (
     "너는 사용자와 음성으로 대화하는 친근한 파트너 '스트라타'다. "
@@ -204,8 +245,8 @@ class StreamVAD:
         self.silence_run = 0
         self.floor = 0.004
 
-    def feed(self, frame: np.ndarray):
-        rms = float(np.sqrt(np.mean(frame * frame))) if len(frame) else 0.0
+    def feed(self, frame):
+        rms = _rms(frame)
         speaking = rms > max(self.threshold, self.floor * 3.0)
         events: list[tuple[str, object]] = []
         if self.seg is None:
@@ -228,7 +269,7 @@ class StreamVAD:
             else:
                 self.silence_run += 1
             if self.silence_run >= self.silence_need or len(self.seg) >= self.max_frames:
-                seg = np.concatenate(self.seg)
+                seg = _f32_concat(self.seg)
                 self.reset()
                 events.append(("speech_end", seg))
         return events
@@ -590,7 +631,7 @@ class Hub:
         usable = buf[:n * Session.FRAME_BYTES]
         session.leftover = buf[n * Session.FRAME_BYTES:]
         self.frames_in += n
-        arr = np.frombuffer(usable, dtype=np.int16).astype(np.float32) / 32768.0
+        arr = _f32_from_pcm(usable)
         for i in range(n):
             frame = arr[i * StreamVAD.FRAME:(i + 1) * StreamVAD.FRAME]
             for ev, seg in session.vad.feed(frame):
@@ -611,7 +652,7 @@ class Hub:
     async def _transcribe_and_say(self, session: Session, seg):
         if seg is None or len(seg) < StreamVAD.FRAME:
             return
-        pcm = (np.clip(seg, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+        pcm = _f32_to_pcm16(seg)
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         tmp.close()
         try:
