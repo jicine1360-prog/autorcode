@@ -197,7 +197,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                                 for m in app.agent.mem.turns))
             self.assertEqual(app._attachment, [])
 
-    async def test_ctrl_v_attaches_clipboard_image(self):
+    async def test_ctrl_g_attaches_clipboard_image(self):
         import base64
         import os
         from unittest import mock
@@ -209,11 +209,34 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 fh.write(base64.b64decode(ONE_PX_PNG))
             from harness import tui as tui_mod
             with mock.patch.object(tui_mod, "clipboard_image", return_value=(path, "")):
-                await pilot.press("ctrl+v")
+                await pilot.press("ctrl+g")
                 await pilot.pause(0.3)
             self.assertEqual(app._attachment, [path])
             kinds = [type(c).__name__ for c in app.query_one("#log").children]
             self.assertIn("ImagePreview", kinds)
+
+    async def test_multiline_paste_is_flattened(self):
+        """여러 줄 붙여넣기가 첫 줄만 남지 않고 한 줄로 합쳐진다."""
+        from textual import events
+        app = await self._app()
+        async with app.run_test(size=(100, 32)) as pilot:
+            await pilot.pause(0.3)
+            prompt = app.query_one("#prompt")
+            prompt.post_message(events.Paste("첫 줄 명령\n둘째 줄 인자\n\n셋째 줄"))
+            await pilot.pause(0.2)
+            self.assertEqual(prompt.value, "첫 줄 명령 둘째 줄 인자 셋째 줄")
+
+    async def test_ctrl_v_pastes_clipboard_text_flattened(self):
+        """Ctrl+V 는 시스템 클립보드 텍스트를 한 줄로 합쳐 넣는다 (그림 아님)."""
+        from unittest import mock
+        app = await self._app()
+        async with app.run_test(size=(100, 32)) as pilot:
+            await pilot.pause(0.3)
+            from harness import tui as tui_mod
+            with mock.patch.object(tui_mod, "clipboard_text", return_value="첫 줄\n둘째 줄"):
+                await pilot.press("ctrl+v")
+                await pilot.pause(0.2)
+            self.assertEqual(app.query_one("#prompt").value, "첫 줄 둘째 줄")
 
     async def test_voice_room_toggle_and_routing(self):
         """/voice → 같은 방 이벤트가 자막으로 뜨고, 입력은 방으로(에이전트 아님) 간다."""

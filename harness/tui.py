@@ -12,7 +12,8 @@ import 하는 시점이 아니라 ``run_tui`` 호출 시점에 안내 메시지�
    F2         모델 선택기      F3       세션 브라우저  Ctrl+T   테마 전환
    Ctrl+L     화면 지우기      Esc      현재 작업 취소
    Ctrl+C     선택 복사(없으면 종료)  Ctrl+Shift+C 선택 복사
-   Ctrl+V     그림 첨부 — 클립보드 그림/파일을 창에 미리보기(▀)+OCR 로 뿌리고 다음 메시지에 전송
+   Ctrl+G     그림 첨부 — 클립보드 그림/파일을 창에 미리보기(▀)+OCR 로 뿌리고 다음 메시지에 전송
+   Ctrl+V     텍스트 붙여넣기(여러 줄은 한 줄로 합침)
    /voice     음성방 참여 — 폰/PC 브라우저 마이크와 같은 대화(터미널은 자막·타이핑으로 참여)
    /duet      봇끼리 대화 — /duet <주제> 로 로이와 봇이 자동 대화(각자 다른 목소리), /duet stop 중단
    슬래시     /help /model /sessions /theme /status /tools /clear /auto /approve /pause /resume /cancel /compact /copy /image /voice /duet /quiet /quit
@@ -85,6 +86,18 @@ def _run_clip_cmd(cmd, text=False, timeout=5):
         return r if r.returncode == 0 else None
     except Exception:
         return None
+
+
+def clipboard_text() -> str:
+    """클립보드의 텍스트 — wl-paste → xclip → xsel → pbpaste."""
+    for cmd in (["wl-paste", "--no-newline"],
+                ["xclip", "-selection", "clipboard", "-o"],
+                ["xsel", "--clipboard", "--output"],
+                ["pbpaste"]):
+        r = _run_clip_cmd(cmd, text=True)
+        if r is not None and (r.stdout or "").strip():
+            return r.stdout
+    return ""
 
 
 def clipboard_image(dest_dir: str):
@@ -263,6 +276,23 @@ def _build_app_classes():
     from rich.text import Text
 
     # ---------------- 위젯 ----------------
+    class PromptInput(Input):
+        """한 줄 입력. 여러 줄 붙여넣기는 공백으로 합쳐 받는다.
+
+        Textual 기본 Input 은 붙여넣기에서 첫 줄만 넣어, 여러 줄 지시문을
+        복사하면 나머지가 잘린다. 여기서는 모든 줄을 이어 붙인다.
+        """
+
+        def _on_paste(self, event) -> None:
+            # Textual 은 MRO 를 따라 Input._on_paste(첫 줄만 넣음)까지 함께
+            # 호출한다. prevent_default() 로 기본 동작을 끊어야 중복되지 않는다.
+            event.prevent_default()
+            text = str(getattr(event, "text", "") or "")
+            flat = " ".join(line.strip() for line in text.splitlines() if line.strip())
+            if flat:
+                self.insert_text_at_cursor(flat)
+            event.stop()
+
     class Notice(Static):
         def __init__(self, text, kind="info"):
             super().__init__(Text(clean(text), style="dim"), classes=f"notice {kind}")
@@ -571,7 +601,8 @@ def _build_app_classes():
             Binding("ctrl+q", "quit_app", "종료"),
             Binding("ctrl+c", "copy_or_quit", "복사/종료", priority=True),
             Binding("ctrl+shift+c", "copy_selection", "선택 복사"),
-            Binding("ctrl+v", "paste_image", "그림 첨부", priority=True),
+            Binding("ctrl+v", "paste_text", "붙여넣기", priority=True),
+            Binding("ctrl+g", "paste_image", "그림 첨부", priority=True),
             Binding("f2", "model_picker", "모델"),
             Binding("f3", "session_picker", "세션"),
             Binding("ctrl+t", "cycle_theme", "테마"),
@@ -611,8 +642,8 @@ def _build_app_classes():
                 yield Static(id="welcome")
             yield Static(id="activity")
             yield OptionList(id="slashmenu")
-            yield Input(placeholder="메시지 입력  (/help · F2 모델 · F3 세션 · Ctrl+T 테마)",
-                        id="prompt")
+            yield PromptInput(placeholder="메시지 입력  (/help · F2 모델 · F3 세션 · Ctrl+T 테마)",
+                              id="prompt")
 
         def on_mount(self):
             self.title = "autorcode"
@@ -622,7 +653,7 @@ def _build_app_classes():
             log.query_one("#welcome").update(Text.assemble(
                 ("  autorcode TUI\n", "bold"),
                 (f"  모델 {self.cfg.model_fast}  ·  작업 위치 {self.cfg.workspace_root}\n", "dim"),
-                ("  Enter 전송 · Ctrl+V 그림 첨부 · Ctrl+P 팔레트 · F2 모델 · F3 세션 · Ctrl+T 테마\n", "dim"),
+                ("  Enter 전송 · Ctrl+V 붙여넣기 · Ctrl+G 그림 · Ctrl+P 팔레트 · F2 모델 · F3 세션 · Ctrl+T 테마\n", "dim"),
             ))
             self.query_one("#prompt", Input).focus()
             self.query_one("#slashmenu", OptionList).display = False
@@ -1302,7 +1333,23 @@ def _build_app_classes():
                 return False
             return True
 
-        # ---- 그림 첨부 (Ctrl+V · /image) ----
+        # ---- 텍스트 붙여넣기 (Ctrl+V) ----
+        def action_paste_text(self):
+            text = clipboard_text()
+            if not text:
+                self._notice("클립보드에 텍스트가 없습니다 — 터미널 붙여넣기(Ctrl+Shift+V)를 써보세요", "warn")
+                return
+            flat = " ".join(line.strip() for line in text.splitlines() if line.strip())
+            if isinstance(self.focused, Input):
+                target = self.focused
+            elif len(self.screen_stack) == 1:
+                target = self.query_one("#prompt", Input)
+            else:
+                return   # 모달이 열려 있으면 가려진 프롬프트에 넣지 않는다
+            target.insert_text_at_cursor(flat)
+            target.focus()
+
+        # ---- 그림 첨부 (Ctrl+G · /image) ----
         def _inbox_dir(self):
             return os.path.join(self.cfg.workspace_root, "inbox")
 

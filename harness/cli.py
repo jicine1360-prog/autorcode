@@ -240,7 +240,7 @@ GPU 없이 즉시 사용 (OpenRouter — 모델명 '/' 포함)
 
 TUI 모드 (autorcode tui · Textual 필요: pip install 'autorcode[tui]')
   Enter 전송 · Ctrl+P 팔레트 · F2 모델 · F3 세션 · Ctrl+T 테마 · Ctrl+L 지우기
-  Ctrl+V 그림 첨부(컬러 미리보기 + OCR) · Esc 작업 취소 · Ctrl+Q 종료
+  Ctrl+G 그림 첨부(컬러 미리보기 + OCR) · Esc 작업 취소 · Ctrl+Q 종료
   /voice 음성방 — 폰/PC 브라우저 마이크와 같은 대화(터미널은 자막·타이핑 참여)
   /duet <주제> 봇끼리 대화 — 로이와 봇이 자동 티키타카 (중단 /duet stop)
   슬래시: /help /model /sessions /theme /status /tools /clear /auto /pause /resume /cancel /compact /copy /image /voice /duet /quit
