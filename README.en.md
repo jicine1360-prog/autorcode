@@ -243,6 +243,9 @@ AGENT_MODEL_FAST/SMART         ollama model names (default qwen3:30b-a3b / qwen3
 AGENT_PERMS                    yolo | balanced (default) | strict
 AGENT_MAX_STEPS(15) AGENT_BASH_TIMEOUT(30) AGENT_CONTEXT_TOKENS(40000)
 AGENT_RLIMIT_MEM_MB(4096) AGENT_RLIMIT_NPROC(128) AGENT_MAX_TOKENS(8192)
+AGENT_REPEAT_LIMIT(3)          # identical (tool,args) repeat → skip + correction nudge
+AGENT_LOOP_LIMIT(3)            # same failure with only a counter changed 3x → abort (0=off)
+AGENT_BLOCK_SELF_COPY(1)       # block same-host rsync/scp → suggest cp (0=allow)
 AGENT_REASONING_EFFORT(none)   # thinking models: none·low·medium·high (local default none)
 AGENT_SHOW_STEPS(1) AGENT_SHOW_DETAILS(0) AGENT_STREAM(1) AGENT_NATIVE_TOOLS(1)   # 0/1
 ```

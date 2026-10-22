@@ -272,6 +272,48 @@ class TestAgentLoop(unittest.TestCase):
         self.assertIn("[중단]", out)
         self.assertIn("교정 안내 무시", out)
 
+    def test_self_copy_blocked_before_execution(self):
+        """ssh 로 들어간 호스트 자신을 rsync/scp 하는 명령은 실행 전에 cp 로 차단."""
+        a = Agent(self._cfg())
+        cmd = "ssh -o BatchMode=yes h 'rsync -e ssh h:/tmp/gen.json /tmp/self1.json'"
+        err = a._gate("bash", {"command": cmd})
+        self.assertIn("차단", err)
+        self.assertIn("cp /tmp/gen.json /tmp/self1.json", err)
+        self.assertIsNone(a._gate("bash", {"command": "ls -la"}))
+
+    def test_semantic_loop_aborts_on_exit_zero_trap(self):
+        """카운터만 바꾼 같은 실패 3회 → 중단. setsid 처럼 exit=0 이어도
+        출력의 rsync error code 255 를 실패로 읽는다."""
+        n = {"calls": 0}
+        def content(obs, b):
+            n["calls"] += 1
+            cmd = (f"echo '[exit=0]'; echo 'rsync error: unexplained error "
+                   f"(code 255)'; echo self{n['calls']}.json")
+            return {"content": "", "tool_calls": [{
+                "id": f"call_l{n['calls']}", "type": "function",
+                "function": {"name": "bash",
+                             "arguments": json.dumps({"command": cmd})}}]}
+        _Handler.content = staticmethod(content)
+        out = Agent(self._cfg(max_iterations=10)).run("의미 반복 확인")
+        self.assertIn("[중단]", out)
+        self.assertIn("3회 연속", out)
+        self.assertEqual(n["calls"], 3)
+
+    def test_self_copy_hint_injected_once(self):
+        """같은 호스트 rsync/scp 는 첫 실패에 cp 로 교정하고, 안내는 반복하지 않는다."""
+        a = Agent(self._cfg())
+        cmd = ("ssh -o BatchMode=yes h 'rsync -e ssh h:/tmp/gen.json "
+               "/tmp/self1.json'")
+        bad = "[exit=0]\nrsync error: unexplained error (code 255)"
+        msg, abort = a._loop_feedback([("bash", {"command": cmd}, bad)])
+        self.assertIn("cp /tmp/gen.json /tmp/self1.json", msg)
+        self.assertEqual(abort, "")
+        msg2, _ = a._loop_feedback([("bash", {"command": cmd.replace("1", "2")}, bad)])
+        self.assertNotIn("cp /tmp/gen.json", msg2)   # 같은 진단 반복 없음
+        self.assertIn("같은 시도가 연속 실패", msg2)  # 대신 전략 변경 지시
+        _, abort3 = a._loop_feedback([("bash", {"command": cmd.replace("1", "3")}, bad)])
+        self.assertIn("3회 연속", abort3)
+
     def test_repeat_native_nudge_and_continue(self):
         """네이티브 tool_calls 경로도 반복 시 실행 생략 + 지시 후 계속한다."""
         n = {"calls": 0, "nudged": 0, "steered": 0}

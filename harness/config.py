@@ -68,6 +68,13 @@ class Config:
     # 같은 (도구, 인자) 호출이 이 횟수에 닿으면 먼저 실행을 생략하고 교정 안내를 주입한다.
     # 안내를 무시하고 또 반복할 때만 작업을 중단한다.
     repeat_limit: int = int(os.getenv("AGENT_REPEAT_LIMIT", "3"))
+    # 인자만 살짝 바꾼 '같은 시도'가 연속 실패하면 중단한다. self1.json→self2.json
+    # 같은 카운터 변경을 같은 시도로 본다. 0 이하면 비활성.
+    # exit=0 이어도 출력에 rsync error code 255 같은 오류가 있으면 실패로 센다.
+    loop_limit: int = int(os.getenv("AGENT_LOOP_LIMIT", "3"))
+    # ssh 로 들어간 호스트 안에서 그 호스트 자신을 rsync/scp 하는 명령은 실행 전에 차단한다
+    # (같은 호스트 복사는 cp). 0 이면 진단만 하고 실행은 허용.
+    block_self_copy: bool = os.getenv("AGENT_BLOCK_SELF_COPY", "1") == "1"
 
     # --- 도구 하네스 한도 ---
     bash_timeout: int = int(os.getenv("AGENT_BASH_TIMEOUT", "30"))
