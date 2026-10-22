@@ -1,8 +1,29 @@
 [project]
 name = "autorcode"
 version = "2.2.0"
-description = "모델 라우팅 + 도구 실행 하네스 — ollama 스타일 로컬 에이전트 CLI (autorcode)"
+description = "Local-first LLM agent CLI — model routing + sandboxed tool execution on your own server (Ollama by default)"
+readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.9"
+license = {text = "MIT"}
+keywords = ["llm", "agent", "cli", "ollama", "local-first", "ai", "assistant", "tools"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Terminals",
+]
+
+[project.urls]
+Homepage = "https://github.com/jicine1360-prog/autorcode"
+Repository = "https://github.com/jicine1360-prog/autorcode"
+Issues = "https://github.com/jicine1360-prog/autorcode/issues"
 
 [project.scripts]
 autorcode = "harness.cli:main"

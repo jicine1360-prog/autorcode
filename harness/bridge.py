@@ -70,7 +70,7 @@ def _resolve_root(requested: str) -> str:
     왜 이게 필요한가: 이전에는 `req.get("root")` 를 검증 없이 그대로 샌드박스 루트로
     썼다. --workspace 를 아무리 좁혀도 클라이언트가 root 를 대신 지정하면 그대로
     샌드박스를 벗어났다. 실제로 --workspace /tmp/narrow-ws 로 띄운 브리지에
-    {"root": "/home/younger"} 를 실어 보내 ~/.bashrc 를 그대로 읽었다. 토큰 하나면
+    {"root": "/home/user"} 를 실어 보내 ~/.bashrc 를 그대로 읽었다. 토큰 하나면
     ~/.ssh/id_ed25519, ~/.autorcode/telegram.json 처럼 샌드박스 밖에 있는 비밀도
     모두 닿는다. --workspace 를 좁히는 것으로는 막을 수 없다. 요청 필드 자체가
     구멍이므로 여기서 막아야 한다.

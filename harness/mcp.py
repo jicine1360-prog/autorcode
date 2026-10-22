@@ -3,7 +3,7 @@
 설정: ~/.autorcode/mcp.json
 {
   "mcpServers": {
-    "filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/hoony"]}
+    "filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user"]}
   }
 }
 

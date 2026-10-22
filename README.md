@@ -47,7 +47,7 @@ autorcode doctor
 정상 출력 예시:
 ```text
 python   : 3.12.3  /usr/bin/python3
-cli 위치 : /home/younger/autorcode
+cli 위치 : /home/user/autorcode
 ollama   : http://127.0.0.1:11434 OK — 모델 6개, 로드중 ['qwen3.8:latest']
 메모리   : total 62GB / avail 48GB
 경고     : AGENT_BASE_URL/OLLAMA_HOST 미설정 → autorcode run은 ollama 기본으로 동작
@@ -287,7 +287,7 @@ autorcode chat deepseek/deepseek-chat-v3                           # 도구 없�
 아래는 **화면 형식 예시**입니다(시간과 내용은 실행마다 달라집니다).
 
 ```text
-[시작] qwen3-next:80b-128k · fast · 작업 위치: /home/hoony
+[시작] qwen3-next:80b-128k · fast · 작업 위치: /home/user
 [1/15] 모델 응답 대기 · qwen3-next:80b-128k
   | 모델 응답 수신 중 · 183자 · 6.2s
 [1] 모델 응답 수신 완료 · 7.1s · 230자

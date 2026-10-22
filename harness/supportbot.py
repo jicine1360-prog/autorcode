@@ -54,9 +54,9 @@ FAQ = [
 
 _ESCALATE = ["불만", "환불", "에러", "장애", "안 되", "고장", "버그", "데이터 삭제", "유출", "보안", "해킹"]
 
-# 야간(younger) 전용 고난도 LLM — 별도 엔드포인트로 라우팅 (fast보다 강한 모델)
+# 고난도 LLM 전용 — 별도 엔드포인트로 라우팅 (fast보다 강한 모델)
 _NIGHT_BASE_URL = os.getenv("SUPPORT_NIGHT_BASE_URL",
-                            "http://100.110.82.116:8086/v1")
+                            "http://127.0.0.1:8086/v1")
 _NIGHT_MODEL = os.getenv("SUPPORT_NIGHT_MODEL", "")  # 비면 서버 기본 모델 사용
 _NIGHT_API_KEY = os.getenv("SUPPORT_NIGHT_API_KEY", "")
 

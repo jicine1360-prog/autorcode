@@ -136,7 +136,7 @@ By default it shows the progress from the model request to the final answer.
 Below is a **screen format example** (timing and content vary per run).
 
 ```text
-[start] qwen3-next:80b-128k · fast · working dir: /home/hoony
+[start] qwen3-next:80b-128k · fast · working dir: /home/user
 [1/15] waiting for model response · qwen3-next:80b-128k
   | receiving model response · 183 chars · 6.2s
 [1] model response received · 7.1s · 230 chars
