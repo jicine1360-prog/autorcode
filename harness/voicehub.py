@@ -152,6 +152,8 @@ class Config:
         self.vad_silence_ms = int(over.get("vad_silence_ms") or env("VOICEHUB_VAD_SILENCE_MS", "600"))
         self.vad_min_speech_ms = int(over.get("vad_min_speech_ms") or env("VOICEHUB_VAD_MIN_SPEECH_MS", "200"))
         self.tts_voice = over.get("tts_voice") or env("VOICEHUB_TTS_VOICE", "ko-KR-SunHiNeural")
+        # 서버 스피커로 AI 음성을 재생할 ALSA 카드 (비어있으면 자동선택, "off" 로 끄기)
+        self.speaker = over.get("speaker") or env("VOICEHUB_SPEAKER", "auto")
         self.tts_bin = over.get("tts_bin") or env("VOICEHUB_TTS_BIN", "") or self._find_tts()
         self.room_file = over.get("room_file") or env("VOICEHUB_ROOM", _home(".autorcode", "voice_room.jsonl"))
         self.system = over.get("system") or env("VOICEHUB_SYSTEM", DEFAULT_SYSTEM)
@@ -162,12 +164,15 @@ class Config:
 
     @staticmethod
     def _find_tts() -> str:
-        cands = [shutil.which("edge-tts"),
-                 _home(".hermes", "hermes-agent", "venv", "bin", "edge-tts"),
-                 _home(".local", "bin", "edge-tts")]
+        # 가장 최근 설치된 동작하는 edge-tts 우선 — 오래된 hermes venv 는 Microsoft 403 으로 실패한다.
+        cands = [_home(".local", "bin", "edge-tts"),
+                 shutil.which("edge-tts"),
+                 _home(".hermes", "hermes-agent", "venv", "bin", "edge-tts")]
+        seen = set()
         for c in cands:
-            if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            if c and os.path.isfile(c) and os.access(c, os.X_OK) and c not in seen:
                 return c
+            seen.add(c)
         return ""
 
     def scheme(self) -> str:
@@ -445,6 +450,87 @@ class Hub:
         self.llm = mock_llm if self.cfg.mock else default_llm_stream
         self.tts = default_tts
         self._mock_silence: bytes | None = None
+        self._speaker_proc = None
+
+    # ---- 서버 스피커 재생 (선택) — AI 음성을 이 기계에서도 듣기 ----
+    def _speaker_card(self) -> str:
+        """쓰기 가능한 첫 ALSA 재생 카드를 골라 'hw:N,D' 반환."""
+        if getattr(self.cfg, "speaker", "auto") in ("", "off", "none", "0"):
+            return ""
+        if self.cfg.speaker not in ("auto", "1", "true"):
+            return self.cfg.speaker  # 사용자가 hw:1,7 같은 카드 직접 지정
+        import glob
+        import re as _re
+        cands = []
+        for d in sorted(glob.glob("/dev/snd/pcmC*D?p")):
+            m = _re.search(r"pcmC(\d+)D(\d+)p", d)
+            if m:
+                cands.append((m.group(1), m.group(2), d))
+        if not cands:
+            return ""
+        # 그룹 확인은 os.getgroups() 만 사용 (하위프로세스 probe 는 sg 가
+        # user namespace 안에서 실패할 수 있어 신뢰 불가). ffplay 실행 시
+        # sg audio 로 승격하며, 실패하면 play_local 이 조용히 생략한다.
+        try:
+            import grp
+            gid = grp.getgrnam("audio").gr_gid
+        except (KeyError, OSError):
+            return ""
+        # sg audio 승격 가능 여부는 os.access(group) 로 판단 — 하위프로세스
+        # probe 는 sg 가 user namespace 안에서 실패할 수 있어 신뢰 불가.
+        # 실제 ffplay 실패는 play_local 이 조용히 삼킨다.
+        if gid not in os.getgroups() and not os.access(cands[0][2], os.W_OK | os.X_OK):
+            # 그룹 멤버가 아닌데 쓰기 불가 → sg 승격이 필요한 상태. sg 존재만 확인.
+            if not shutil.which("sg"):
+                return ""
+        return f"hw:{cands[0][0]},{cands[0][1]}"
+
+    def _play_cmd(self, card: str):
+        """ffplay 실행 명령 — 보조그룹이 없으면 sg audio 로 승격해 실행."""
+        cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "-"]
+        try:
+            import grp
+            need_sg = grp.getgrnam("audio").gr_gid not in os.getgroups()
+        except (KeyError, OSError):
+            need_sg = False
+        if need_sg:
+            return ["sg", "audio", "-c",
+                    "SDL_AUDIODRIVER=alsa SDL_ALSA_CARD=%s ffplay -nodisp -autoexit -loglevel error -" % card], dict(os.environ)
+        env = dict(os.environ, SDL_AUDIODRIVER="alsa", SDL_ALSA_CARD=card)
+        return cmd, env
+
+    def play_local(self, mp3: bytes):
+        """mp3 바이트를 서버 스피커로 재생 — 카드가 없거나 권한 없으면 조용히 생략."""
+        card = self._speaker_card()
+        if not card or not mp3:
+            return
+        try:
+            import subprocess
+            self.stop_local()
+            cmd, env = self._play_cmd(card)
+            self._speaker_proc = subprocess.Popen(
+                cmd, stdin=subprocess.PIPE, env=env,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            def _feed():
+                try:
+                    self._speaker_proc.stdin.write(mp3)
+                    self._speaker_proc.stdin.close()
+                except Exception:
+                    pass
+            threading.Thread(target=_feed, daemon=True).start()
+        except Exception:
+            self._speaker_proc = None
+
+    def stop_local(self):
+        proc = self._speaker_proc
+        self._speaker_proc = None
+        if proc is None:
+            return
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+        except Exception:
+            pass
 
     # ---- STT ----
     def _stt_default(self, path: str) -> str:
@@ -490,6 +576,7 @@ class Hub:
             self.stop_duet()  # 사람이 말을 걸면 봇 대화는 양보
         entry = self.room.add("user", text, who)
         await self.broadcast({"type": "user", **entry})
+        self.stop_local()  # 새 답변 시작 — 이전 발화 잔향 정리
         self._respond_task = asyncio.create_task(self.respond())
 
     def cancel_reply(self):
@@ -514,6 +601,7 @@ class Hub:
         return True, ""
 
     def stop_duet(self):
+        self.stop_local()
         task = self._duet_task
         if task and not task.done():
             task.cancel()
@@ -557,6 +645,7 @@ class Hub:
                                 while len(self.audio) > 40:
                                     self.audio.popitem(last=False)
                                 audio_url = f"/tts/{aid}.mp3"
+                                self.play_local(mp3)
                         except Exception:
                             pass
                         role = "assistant" if speaker == "로이" else "user"
@@ -599,7 +688,9 @@ class Hub:
                     while len(self.audio) > 40:
                         self.audio.popitem(last=False)
                     audio_url = f"/tts/{aid}.mp3"
+                    self.play_local(mp3)
             except asyncio.CancelledError:
+                self.stop_local()
                 await self._finish_interrupted(parts)
                 return
             except Exception:
@@ -608,6 +699,7 @@ class Hub:
 
     async def _finish_interrupted(self, parts: list[str]):
         """끼어들기 정리 — 재생 정지 방송 + 이미 말한 부분은 기록에 남긴다."""
+        self.stop_local()
         try:
             await self.broadcast({"type": "interrupt"})
         except Exception:
@@ -953,9 +1045,10 @@ def main(argv=None):
     p.add_argument("--cert")
     p.add_argument("--key")
     p.add_argument("--model")
+    p.add_argument("--speaker", help="서버 스피커로 AI 음성 재생 (auto|hw:N,D|off)")
     a = p.parse_args(argv)
     cfg = Config(port=a.port, host=a.host, mock=a.mock, tls_cert=a.cert,
-                 tls_key=a.key, model=a.model)
+                 tls_key=a.key, model=a.model, speaker=a.speaker)
     try:
         asyncio.run(amain(cfg))
     except KeyboardInterrupt:

@@ -634,6 +634,9 @@ def _build_app_classes():
             self._voice_live = None
             self._voice_buf = ""
             self._voice_speaker = None
+            self._voice_talk = False
+            self._voice_player = None
+            self._voice_seen = set()
 
         # ---- 수명주기 ----
         def compose(self) -> ComposeResult:
@@ -1226,11 +1229,25 @@ def _build_app_classes():
                 self._voice = None
                 self._voice_on = False
                 self._voice_live = None
+                self._voice_talk = False
+                self._voice_kill_player()
                 self._notice("음성방에서 나왔습니다")
                 self._refresh_status()
                 return
+            if arg in ("talk", "말하기", "스피커", "sound", "on"):
+                if not self._voice_on:
+                    self._notice("먼저 /voice 로 음성방에 들어가세요", "warn")
+                    return
+                self._voice_talk = True
+                self._notice("🔊 터미널도 말하기 시작 — AI 음성이 여기서도 들립니다", "ok")
+                return
+            if arg in ("mute", "조용히", "silent", "조용"):
+                self._voice_talk = False
+                self._voice_kill_player()
+                self._notice("🔇 터미널 음성 정지 (브라우저는 계속 재생)")
+                return
             if self._voice_on:
-                self._notice("이미 음성방에 있습니다 — 나가려면 /voice off", "warn")
+                self._notice("이미 음성방에 있습니다 — 나가려면 /voice off, 말하려면 /voice talk", "warn")
                 return
             import re as _re
             import socket as _socket
@@ -1253,6 +1270,58 @@ def _build_app_classes():
                 self._voice_event(ev)
             else:
                 self.call_from_thread(self._voice_event, ev)
+
+        def _voice_pick_card(self) -> str:
+            """재생 가능한 ALSA 카드를 골라 'hw:N,0' 반환 — 권한/연결된 출력 고려."""
+            import glob
+            for d in sorted(glob.glob("/dev/snd/pcmC*D?p")):
+                try:
+                    if not os.access(d, os.W_OK):
+                        continue
+                except OSError:
+                    continue
+                m = re.search(r"pcmC(\d+)D(\d+)p", d)
+                if m:
+                    return f"hw:{m.group(1)},{m.group(2)}"
+            return ""
+
+        def _voice_kill_player(self):
+            proc = getattr(self, "_voice_player", None)
+            self._voice_player = None
+            if proc is None:
+                return
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+            except Exception:
+                pass
+
+        def _voice_play(self, audio_url: str):
+            """AI/봇 음성을 터미널에서도 재생 — ffplay 로 mp3 를 틀고 끼어들기 시 종료."""
+            if not self._voice_talk or not audio_url:
+                return
+            import subprocess
+            base = os.environ.get("VOICEHUB_WS", "ws://127.0.0.1:8096/ws")
+            base = base.replace("wss://", "https://").replace("ws://", "http://")
+            base = base[:-len("/ws")] if base.endswith("/ws") else base.rstrip("/")
+            url = audio_url if audio_url.startswith("http") else base + audio_url
+            if url in self._voice_seen:
+                return
+            self._voice_seen.add(url)
+            if len(self._voice_seen) > 200:
+                self._voice_seen = set(list(self._voice_seen)[-100:])
+            self._voice_kill_player()
+            try:
+                card = self._voice_pick_card()
+                cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "warning"]
+                if card:
+                    cmd += ["-i", "alsa", f"alsa={card}"]
+                cmd.append(url)
+                err = open(os.path.expanduser("~/.autorcode/voice_tui_play.log"), "ab", buffering=0)
+                self._voice_player = subprocess.Popen(
+                    cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err)
+            except Exception:
+                self._voice_player = None
 
         def _voice_event(self, ev):
             if not self._voice_on:
@@ -1297,6 +1366,7 @@ def _build_app_classes():
                 self._voice_buf = ""
                 self._voice_speaker = None
                 label = self._voice_label(who)
+                self._voice_play(str(ev.get("audio", "")))
                 if self._voice_live is not None:
                     try:
                         self._voice_live.update(Text(label + text))
@@ -1319,6 +1389,7 @@ def _build_app_classes():
                 self._voice_live = None
                 self._voice_buf = ""
                 self._voice_speaker = None
+                self._voice_kill_player()
                 self._notice("🎤 끼어들기 — AI 답변이 중단됐습니다")
             elif kind == "status" and "끊김" in str(ev.get("text", "")):
                 self._notice(str(ev.get("text")), "warn")
