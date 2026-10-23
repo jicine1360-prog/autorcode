@@ -9,9 +9,9 @@ from harness import loops  # noqa: E402
 
 # 실제 사고 명령 — 카운터만 selfN/rsN 으로 바뀌며 231~240 스텝 반복됐다.
 INCIDENT = (
-    'timeout 15 ssh -o BatchMode=yes sehane@100.113.203.75 '
+    'timeout 15 ssh -o BatchMode=yes bob@10.20.30.40 '
     '\'setsid bash -c "rsync -e \\"ssh -o BatchMode=yes\\" '
-    'sehane@100.113.203.75:/tmp/gen.json /tmp/self137.json > /tmp/rs147.log 2>&1" '
+    'bob@10.20.30.40:/tmp/gen.json /tmp/self137.json > /tmp/rs147.log 2>&1" '
     '</dev/null >/dev/null 2>&1 & sleep 8; tail -1 /tmp/rs147.log; '
     'stat -c %s /tmp/self137.json 2>/dev/null\' 2>&1 | head -3'
 )
@@ -57,7 +57,7 @@ class TestSelfCopyHint(unittest.TestCase):
         self.assertIn("같은 호스트", hint)
 
     def test_plain_ssh_command_has_no_hint(self):
-        self.assertEqual(loops.self_copy_hint("ssh sehane@100.113.203.75 'ls -la /tmp'"), "")
+        self.assertEqual(loops.self_copy_hint("ssh bob@10.20.30.40 'ls -la /tmp'"), "")
 
     def test_remote_to_remote_scp_has_no_hint(self):
         cmd = "ssh -o BatchMode=yes h 'scp h:/tmp/a h:/tmp/b'"

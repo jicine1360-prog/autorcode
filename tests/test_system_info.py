@@ -6,7 +6,7 @@ from harness import tools
 
 class SystemInfoTest(unittest.TestCase):
     def _info(self, **args):
-        return tools.execute("system_info", args, "/home/hoony", 8000, 20)
+        return tools.execute("system_info", args, "/home/user", 8000, 20)
 
     def test_registered_in_tools(self):
         self.assertIn("system_info", tools.TOOLS)
@@ -65,7 +65,7 @@ class SystemInfoTest(unittest.TestCase):
         self.assertNotIn("[오류]", out)
 
     def test_respects_output_cap(self):
-        capped = tools.execute("system_info", {}, "/home/hoony", 60, 20)
+        capped = tools.execute("system_info", {}, "/home/user", 60, 20)
         self.assertLessEqual(len(capped), 200)
 
     def test_reports_hostname(self):

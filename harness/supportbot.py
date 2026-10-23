@@ -56,7 +56,7 @@ _ESCALATE = ["불만", "환불", "에러", "장애", "안 되", "고장", "버�
 
 # 고난도 LLM 전용 — 별도 엔드포인트로 라우팅 (fast보다 강한 모델)
 _NIGHT_BASE_URL = os.getenv("SUPPORT_NIGHT_BASE_URL",
-                            "http://127.0.0.1:8086/v1")
+                            "http://127.0.0.1:8000/v1")
 _NIGHT_MODEL = os.getenv("SUPPORT_NIGHT_MODEL", "")  # 비면 서버 기본 모델 사용
 _NIGHT_API_KEY = os.getenv("SUPPORT_NIGHT_API_KEY", "")
 
@@ -105,7 +105,7 @@ def _local_answer(msg: str) -> str:
 
 
 def _hard_answer(msg: str) -> str:
-    """고난도(야간/energy) 문의 — younger의 nightshift(대형 모델)로 답변.
+    """고난도(야간/energy) 문의 — 백엔드의 대형 모델로 답변.
 
     fast(phi4)로는 부족한 긴 문의·복합 질문에 사용. 응답이 매우 느리므로
     (프리필 + 디코드 수십 초~수 분) 실패 시 fast 답변으로 폴백한다.
