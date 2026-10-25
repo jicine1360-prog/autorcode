@@ -203,16 +203,42 @@ button.danger { background:#7a2f2f; }
 .approval { background:#33250d; }
 .approval .buttons { margin-top:8px; display:flex; gap:8px; }
 .small { color:#888; font-size:12px; }
+.toolbar { margin-left:auto; display:flex; gap:6px; align-items:center; }
+.toolbar button { padding:6px 10px; font-size:13px; background:#2a2a2a; border:1px solid #444; }
+.toolbar button:hover { background:#3a3a3a; }
+.toolbar .menuwrap { position:relative; }
+.dropdown { display:none; position:absolute; top:calc(100% + 6px); right:0; background:#222; border:1px solid #444; border-radius:8px; min-width:180px; z-index:50; box-shadow:0 8px 24px rgba(0,0,0,.5); }
+.dropdown.open { display:block; }
+.dropdown button { display:block; width:100%; text-align:left; border-radius:0; border:0; background:transparent; }
+.dropdown button:first-child { border-radius:8px 8px 0 0; }
+.dropdown button:last-child { border-radius:0 0 8px 8px; }
+.helpbox { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; z-index:100; }
+.helpbox.open { display:flex; }
+.helpbox .card { background:#1b1b1b; border:1px solid #444; border-radius:12px; padding:18px; max-width:520px; width:90%; max-height:80vh; overflow:auto; white-space:pre-wrap; }
 </style>
 </head>
 <body>
-<header><strong>autorcode web</strong><span id="status" class="small">연결 전</span></header>
+<header><strong>autorcode web</strong><span id="status" class="small">연결 전</span>
+  <div class="toolbar">
+    <div class="menuwrap">
+      <button id="menuBtn" type="button">메뉴 ▾</button>
+      <div id="dropdown" class="dropdown">
+        <button type="button" data-act="pause">일시정지 / 계속</button>
+        <button type="button" data-act="compact">요약 (/compact)</button>
+        <button type="button" data-act="cancel">작업 취소 (/cancel)</button>
+        <button type="button" data-act="help">도움말</button>
+      </div>
+    </div>
+    <button id="websearch" type="button" title="입력창에 웹 검색 프롬프트를 채웁니다">🔍 검색</button>
+    <button id="pauseResume" type="button" title="에이전트 일시정지/계속">⏸</button>
+    <button id="compact" type="button" title="/compact">요약</button>
+    <button id="cancel" type="button" class="danger" title="/cancel">취소</button>
+  </div>
+</header>
 <main id="log"></main>
 <form id="form">
   <input id="input" placeholder="작업 입력 (/compact, /cancel 가능)" autocomplete="off">
   <button type="submit">전송</button>
-  <button id="compact" class="secondary" type="button">요약</button>
-  <button id="cancel" class="danger" type="button">취소</button>
 </form>
 <script>
 const token = localStorage.getItem('autorcode_web_token') || new URLSearchParams(location.search).get('token') || prompt('autorcode web token');
@@ -266,12 +292,73 @@ function connect() {
 }
 form.onsubmit = (e) => {
   e.preventDefault();
-  const text = input.value.trim();
+  let text = input.value.trim();
   if (!text) return;
   if (text === '/cancel') send({type:'cancel'});
   else if (text === '/compact') send({type:'compact'});
-  else send({type:'prompt', text});
-  input.value = '';
+  else {
+    if (text.startsWith('웹검색:') || text.startsWith('/')) { /* 그대로 */ }
+    else if (input.dataset.websearch === '1') text = '웹에서 검색해서 정리해줘: ' + text;
+    send({type:'prompt', text});
+  }
+  input.value = ''; delete input.dataset.websearch;
+};
+
+// ---- 상단 메뉴 ----
+const menuBtn = document.getElementById('menuBtn');
+const dropdown = document.getElementById('dropdown');
+const helpbox = document.createElement('div');
+helpbox.className = 'helpbox';
+helpbox.innerHTML = '<div class="card"><strong>명령 안내</strong>\\n\\n'
+  + '일반 입력 — 작업을 그대로 지시 (예: 벤치 돌려줘)\\n'
+  + '/compact — 지금까지 대화 요약·정리\\n'
+  + '/cancel — 실행 중 작업 취소\\n'
+  + '⏸ 버튼 — 에이전트 일시정지 / 계속\\n'
+  + '🔍 검색 버튼 — 입력을 웹 검색 작업으로 전송\\n\\n'
+  + '승인이 필요한 작업은 화면에 승인 카드가 뜹니다.\\n'
+  + '(같은 명령은 세션 안에서 한 번 승인하면 재문의 없이 진행)</div>';
+helpbox.onclick = () => helpbox.classList.remove('open');
+document.body.appendChild(helpbox);
+
+function toggleMenu(force) {
+  dropdown.classList.toggle('open', force);
+}
+menuBtn.onclick = (e) => { e.stopPropagation(); toggleMenu(); };
+document.addEventListener('click', () => toggleMenu(false));
+dropdown.querySelectorAll('button').forEach(b => {
+  b.onclick = () => {
+    const act = b.dataset.act;
+    if (act === 'pause') document.getElementById('pauseResume').click();
+    else if (act === 'compact') send({type:'compact'});
+    else if (act === 'cancel') send({type:'cancel'});
+    else if (act === 'help') helpbox.classList.add('open');
+    toggleMenu(false);
+  };
+});
+
+// '/' 키 → 메뉴 열기 (TUI 습관 그대로)
+document.addEventListener('keydown', (e) => {
+  const inInput = document.activeElement === input;
+  if (e.key === '/' && !inInput) { e.preventDefault(); toggleMenu(true); }
+  else if (e.key === 'Escape') { toggleMenu(false); helpbox.classList.remove('open'); }
+  else if (e.key === '/' && inInput && input.value === '') { e.preventDefault(); toggleMenu(true); }
+});
+
+// ---- 검색 버튼: 입력창을 웹 검색 모드로 ----
+document.getElementById('websearch').onclick = () => {
+  input.dataset.websearch = '1';
+  input.placeholder = '검색어를 입력하고 Enter (웹 검색으로 전송됩니다)';
+  input.focus();
+};
+
+// ---- 일시정지/계속 토글 ----
+let paused = false;
+const pauseBtn = document.getElementById('pauseResume');
+pauseBtn.onclick = () => {
+  paused = !paused;
+  send({type: paused ? 'pause' : 'resume'});
+  pauseBtn.textContent = paused ? '▶' : '⏸';
+  pauseBtn.title = paused ? '계속 실행' : '일시정지';
 };
 document.getElementById('cancel').onclick = () => send({type:'cancel'});
 document.getElementById('compact').onclick = () => send({type:'compact'});

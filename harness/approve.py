@@ -23,6 +23,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import stat
 import threading
@@ -59,6 +60,7 @@ def _resolve_timeout(data: dict) -> int:
 _TEXT_LIMIT = 3500
 
 _BTN_YES = "승인"
+_BTN_ALWAYS = "✅ 항상 (이 세션)"
 _BTN_NO = "거부"
 
 
@@ -119,13 +121,16 @@ def load_config(path: str = CONFIG_PATH) -> dict:
 # ---------------------------------------------------------------------------
 
 class _Pending:
-    __slots__ = ("chat_id", "message_id", "event", "verdict")
+    __slots__ = ("chat_id", "message_id", "event", "verdict", "sig", "bins")
 
-    def __init__(self, chat_id: int, message_id: int = 0):
+    def __init__(self, chat_id: int, message_id: int = 0,
+                 sig: str = "", bins: Optional[set] = None):
         self.chat_id = chat_id
         self.message_id = message_id
         self.event = threading.Event()
         self.verdict: Optional[bool] = None
+        self.sig = sig
+        self.bins = bins or set()
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +157,11 @@ class ApprovalGate:
         self._api = api_base.rstrip("/")
         self._opener = opener or urllib.request.urlopen
         self._pending: dict[str, _Pending] = {}
+        # 세션 승인 캐시 — "승인 돌고 승인 돌고" 루프를 끊는다.
+        # _once: 이번 게이트 세션에서 승인한 동일 요청(정규화 서명) → 같은 요청은 재문의 없이 통과.
+        # _bins: "항상" 버튼으로 열어둔 바이너리 → 그 바이너리 요청은 세션 동안 무승인.
+        self._once: set = set()
+        self._bins: set = set()
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -182,23 +192,61 @@ class ApprovalGate:
 
     # -- confirmer ---------------------------------------------------------
 
+    @staticmethod
+    def _sig(question: str) -> str:
+        """질문 첫 줄('도구: 인자JSON')의 정규화 서명. 숫자만 바꾼 재시도는 같은 키."""
+        first = str(question or "").splitlines()[0] if question else ""
+        return re.sub(r"\d+", "#", " ".join(first.split()))
+
+    @staticmethod
+    def _bins_of(question: str) -> set:
+        """bash 질문에서 실행 바이너리 이름들을 뽑는다 (파이프/체인 분해)."""
+        first = str(question or "").splitlines()[0] if question else ""
+        args: dict = {}
+        try:
+            if ":" in first:
+                parsed = json.loads(first.split(":", 1)[1].strip())
+                if isinstance(parsed, dict):
+                    args = parsed
+        except ValueError:
+            pass
+        cmd = str(args.get("command") or "")
+        segments = re.split(r"&&|\|\||;|\||\$\(", cmd) if cmd else [first]
+        out = set()
+        for seg in segments:
+            parts = seg.strip().split()
+            if parts:
+                name = os.path.basename(parts[0].strip("():,"))
+                if name:
+                    out.add(name)
+        return out
+
     def __call__(self, question: str) -> bool:
         """승인 질문 하나. True=승인, False=거부(시간 초과 포함)."""
         if self._stop.is_set():
             return False
 
+        sig = self._sig(question)
+        bins = self._bins_of(question)
+        with self._lock:
+            cached = sig in self._once or (bins and bins and bins <= self._bins)
+        if cached:
+            log.info("세션 승인 캐시로 통과")
+            return True
+
         nonce = secrets.token_hex(12)
-        pending = _Pending(self.current_chat or self._target)
+        pending = _Pending(self.current_chat or self._target, sig=sig, bins=bins)
         with self._lock:
             self._pending[nonce] = pending
 
         try:
-            text = f"[승인 요청]\n{question}\n\n{self._timeout}초 안에 답하지 않으면 거부됩니다."
+            text = f"[승인 요청]\n{question}\n\n{self._timeout}초 안에 답하지 않으면 거부됩니다.\n'항상'은 이 세션에서 같은 명령을 다시 묻지 않습니다."
             result = self._call("sendMessage", {
                 "chat_id": pending.chat_id,
                 "text": text[:_TEXT_LIMIT],
                 "reply_markup": {"inline_keyboard": [[
                     {"text": _BTN_YES, "callback_data": f"ag:y:{nonce}"},
+                    {"text": _BTN_ALWAYS, "callback_data": f"ag:a:{nonce}"},
                     {"text": _BTN_NO, "callback_data": f"ag:n:{nonce}"},
                 ]]},
             })
@@ -298,7 +346,7 @@ class ApprovalGate:
             self._answer(cb_id, "무시된 버튼")
             return
         _, verdict, nonce = parts
-        approve = verdict == "y"
+        approve = verdict in ("y", "a")
 
         user_id = int((q.get("from") or {}).get("id", 0) or 0)
         chat_id = int(((q.get("message") or {}).get("chat") or {}).get("id", 0) or 0)
@@ -319,7 +367,14 @@ class ApprovalGate:
 
         pending.verdict = approve
         pending.event.set()
-        self._answer(cb_id, "실행합니다" if approve else "거부했습니다")
+        if approve:
+            with self._lock:
+                self._once.add(pending.sig)
+                if verdict == "a":
+                    self._bins |= set(pending.bins)
+        self._answer(cb_id,
+                     "실행합니다 (이 세션에서 같은 명령은 재문의 없음)" if verdict == "a"
+                     else "실행합니다" if approve else "거부했습니다")
 
     def _answer(self, cb_id: str, text: str) -> None:
         try:
@@ -344,18 +399,34 @@ class ApprovalGate:
 # 진입점
 # ---------------------------------------------------------------------------
 
-def build_from_config(path: str = CONFIG_PATH) -> Optional[ApprovalGate]:
-    """설정에서 게이트를 만든다. 구성 문제가 있으면 None (호출측이 거부로 처리).
+def build_from_config(path: Optional[str] = None) -> Optional[ApprovalGate]:
+    """승인 전용 설정에서 게이트를 만든다. 구성 문제가 있으면 None.
 
-    여기서 예외를 던지지 않는 이유: 게이트를 못 만든 것과 승인을 거부한 것은
-    관점에서 같기 때문이다(둘 다 '실행하지 않음'). 경고는 로그로 남긴다.
+    path 를 명시하면 그 파일만 쓴다(하위호환). None 이면 우선순위:
+      1. AUTORCODE_APPROVE_CONFIG 환경변수가 가리키는 파일
+      2. ~/.autorcode/approve.json  (승인 전용 봇 토큰 — 권장)
+      3. CONFIG_PATH (telegram.json) — 기존 호환
+
+    토큰을 대화 봇과 나눠야 하는 이유: getUpdates 는 토큰당 폴러 하나만
+    허용된다. 대화 봇과 승인 게이트가 같은 토큰을 폴링하면 서로의 long-poll
+    을 409 로 끊고, 그러면 폰의 승인 탭이 가끔 게이트에 도달하지 못해
+    180초 타임아웃 → 재요청 → 또 승인 누르기 루프가 된다.
     """
-    # 설정 파일이 없는 것과 설정이 잘못된 것은 다른 사건이다. 없는 쪽은
-    # "텔레그램 승인을 쓰지 않는다"는 정상 설정이라 WARNING 으로 올리면 안 된다 —
-    # 대부분의 사용자에게는 늘 그렇고, 경고가 stderr 로 새어 --quiet 도 깨뜨린다.
-    # 있으면 잘못된 것이므로 그때는 WARNING 을 유지한다.
-    if not os.path.exists(path):
-        log.info("승인 게이트 미사용: 텔레그램 설정 없음 (%s)", path)
+    if path is None:
+        import os as _os
+        override = _os.getenv("AUTORCODE_APPROVE_CONFIG", "").strip()
+        candidates = [p for p in (
+            override,
+            _os.path.expanduser("~/.autorcode/approve.json"),
+            CONFIG_PATH,
+        ) if p]
+        path = next((p for p in candidates if _os.path.exists(p)), "")
+        if not path:
+            log.info("승인 게이트 미사용: 텔레그램 설정 없음 (%s)", CONFIG_PATH)
+            return None
+        log.info("승인 게이트 설정: %s", path)
+    elif not os.path.exists(path):
+        log.info("승인 게이트 미사용: 설정 파일 없음 (%s)", path)
         return None
 
     try:
