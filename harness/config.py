@@ -58,7 +58,8 @@ class Config:
     # thinking 모델(qwen3 등)의 reasoning을 끈다. 빈 값이면 요청에 실지 않는다.
     # 스트릭트 JSON 도구 규식 하네스는 생각이 max_tokens를 잡아먹어
     # finish_reason=length로 잘려 버리므로 로컬 ollama에서는 기본 "none".
-    reasoning_effort: str = os.getenv("AGENT_REASONING_EFFORT", "")
+    reasoning_effort: str = field(
+        default_factory=lambda: os.getenv("AGENT_REASONING_EFFORT", ""))
     api_timeout: int = int(os.getenv("AGENT_API_TIMEOUT", "120"))
     api_retries: int = int(os.getenv("AGENT_API_RETRIES", "3"))
 
@@ -111,6 +112,7 @@ class Config:
 
     workspace_root: str = field(
         default_factory=lambda: os.path.realpath(os.getenv("AGENT_WORKSPACE", os.getcwd())))
+    agents_md_max_chars: int = int(os.getenv("AGENT_AGENTS_MD_MAX", "4000"))
     log_file: str = os.getenv("AGENT_LOG", "agent.log")
 
     @property

@@ -10,6 +10,7 @@ import sys
 import time
 from typing import Callable, Dict
 
+from . import checkpoints
 from . import notes, safety, schedule, webtools
 from . import geo
 from . import goals
@@ -119,9 +120,11 @@ def _write_file(args: Args, root: str, max_output: int, timeout: int) -> str:
     content = str(args.get("content", ""))
     parent = os.path.dirname(path)
     os.makedirs(parent, exist_ok=True)
+    cid = checkpoints.snapshot(root, path, "write_file")
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
-    return f"저장됨: {path} ({len(content.encode('utf-8'))} bytes)"
+    tail = f" [체크포인트: {cid}]" if cid else ""
+    return f"저장됨: {path} ({len(content.encode('utf-8'))} bytes)" + tail
 
 
 def _edit_file(args: Args, root: str, max_output: int, timeout: int) -> str:
@@ -150,9 +153,11 @@ def _edit_file(args: Args, root: str, max_output: int, timeout: int) -> str:
         if n > 1 and not all_replace:
             return f"[오류] {n}회 일치. old_string을 더 구체적으로 쓰거나 replace_all=true"
         text = text.replace(old, new)
+    cid = checkpoints.snapshot(root, path, "edit_file")
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
-    return f"수정됨: {path} ({n}곳 치환)"
+    tail = f" [체크포인트: {cid}]" if cid else ""
+    return f"수정됨: {path} ({n}곳 치환)" + tail
 
 
 def _list_dir(args: Args, root: str, max_output: int, timeout: int) -> str:
@@ -754,6 +759,10 @@ def _live_models(timeout: int) -> str:
     return "\n".join("  " + ln for ln in lines)
 
 
+def _rollback(args: Args, root: str, max_output: int, timeout: int) -> str:
+    return checkpoints.rollback(root, str(args.get("checkpoint") or "last"))
+
+
 def _subagent(args: Args, root: str, max_output: int, timeout: int) -> str:
     """독립 autorcode 인스턴스에 작업을 위임한다. tasks 목록이면 병렬 실행.
 
@@ -807,6 +816,7 @@ TOOLS: Dict[str, ToolFn] = {
     "write_file": _write_file,
     "edit_file": _edit_file,
     "todo_write": _todo_write,
+    "rollback": _rollback,
     "list_dir": _list_dir,
     "subagent": _subagent,
     "find_files": _find_files,
@@ -845,6 +855,7 @@ SCHEMAS = {
     "write_file": "args: {path:str, content:str} — 파일 생성/전체 저장",
     "edit_file": "args: {path:str, old_string:str, new_string:str, replace_all?:bool, whole_word?:bool} — 부분 치환 (whole_word=true면 단어 단위만)",
     "todo_write": "args: {todos:list, note?:str} — 여러 단계 작업의 계획 목록 작성/갱신(전체 교체). todos=[{\"content\":\"단계 설명\",\"status\":\"pending|doing|done\"}] 형태. 착수 전에 계획 수립, 단계가 끝날 때마다 상태 반영(doing 은 하나만). 단발 작업·단순 질문에는 쓰지 말 것",
+    "rollback": "args: {checkpoint?:str} — write_file/edit_file 실행 전 상태로 복원 ('last' 또는 체크포인트 id, 생략 시 마지막). 없었던 파일은 삭제됨. 롤백 자체는 되돌리기 불가",
     "list_dir": "args: {path?:str} — 디렉터리 목록",
     "subagent": "args: {task:str, tasks?:[str], model?:str, timeout?:int} — 독립 autorcode 인스턴스에 작업 위임(tasks 여러 개면 병렬). 서브는 자동승인으로 돌고 최종 답변만 돌려준다. 긴 작업·병렬 조사용",
     "grep_files": "args: {pattern:str, path?:str, max_matches?:int} — 정규식 내용 검색",

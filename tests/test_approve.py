@@ -4,6 +4,7 @@
 성공 케이스보다 실패 케이스를 더 많이 검증한다 — 게이트는 닫혀야만 안전하다.
 """
 import json
+import io
 import logging
 import os
 import stat
@@ -11,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 
 from harness import approve
 
@@ -24,11 +26,17 @@ class FakeApi:
         self.queue = []
         self.fail_send = False
         self.error_code = None
+        # 실제 텔레그램은 실패를 HTTP 상태 코드로 보낸다. 이 경로를 태우려면
+        # urllib 이 던지는 것과 같은 HTTPError 를 직접 던져야 한다 (error_code 는
+        # HTTP 200 + ok:false 만 흉내낸다 — 둘은 다른 경로다).
+        self.http_error = None
 
     def __call__(self, req, timeout=None):
         method = req.full_url.rsplit("/", 1)[-1]
         payload = json.loads(req.data or b"{}")
         self.calls.append((method, payload))
+        if self.http_error:
+            raise self._http_error(method, self.http_error)
         if self.error_code:
             return _Resp({"ok": False, "error_code": self.error_code,
                           "description": "stub error"})
@@ -42,6 +50,14 @@ class FakeApi:
                 raise OSError("network down")
             return _Resp({"ok": True, "result": {"message_id": 42}})
         return _Resp({"ok": True, "result": True})
+
+    @staticmethod
+    def _http_error(method, code):
+        body = json.dumps({"ok": False, "error_code": code,
+                           "description": "terminated by other getUpdates request"}).encode()
+        return urllib.error.HTTPError(
+            f"https://api.telegram.org/botX/{method}", code, "Conflict", None,
+            io.BytesIO(body))
 
     def tap(self, nonce, verdict="y", user=555, chat=555, cb_id="cb1"):
         self.queue.append({"update_id": len(self.queue) + 1, "callback_query": {
@@ -294,14 +310,47 @@ class GateTest(unittest.TestCase):
         # 같은 토큰으로 다른 폴러가 있으면 조용히 경쟁하지 않고 멈춘다.
         self.api.error_code = 409
         self.gate.start()
-        time.sleep(0.4)
-        self.gate.stop()
+        self._wait_poller_dead()
+        self.assertFalse(self.gate._thread.is_alive())
+
+    def test_poller_stops_on_real_http_409(self):
+        # 실제 텔레그램은 409 를 HTTP 상태 코드로 보낸다. urllib 는 이때 HTTPError 를
+        # 던지므로 ok:false 분기가 아니라 이 경로가 설계대로 끊어야 한다. 여기가
+        # 실제 서버에서 무한 재시도 + 로그 스팸으로 드러나던 자리다.
+        self.api.http_error = 409
+        self._wait_poller_dead()
+        self.assertFalse(self.gate._thread.is_alive())
+
+    def test_poller_stops_on_real_http_401(self):
+        self.api.http_error = 401
+        self._wait_poller_dead()
+        self.assertFalse(self.gate._thread.is_alive())
+
+    def test_transient_http_error_keeps_polling(self):
+        # 409/401 과 달리 5xx 는 재시도해야 한다. 게이트를 끊으면 안 된다.
+        self.api.http_error = 500
+        time.sleep(1.0)
+        self.assertTrue(self.gate._thread.is_alive())
+
+    def _wait_poller_dead(self, secs=3.0):
+        for _ in range(int(secs / 0.05)):
+            if not self.gate._thread.is_alive():
+                return
+            time.sleep(0.05)
 
     def test_call_surfaces_error_code(self):
         self.api.error_code = 401
         with self.assertRaises(RuntimeError) as cm:
             self.gate._call("getMe", {})
         self.assertTrue(str(cm.exception).startswith("401:"))
+
+    def test_call_surfaces_http_status_as_same_contract(self):
+        # _poll 은 "코드:설명" 문자열로 코드를 구분한다. HTTP 상태 경로도 같은
+        # 계약으로 정규화되어야 409/401 분기가 산다.
+        self.api.http_error = 409
+        with self.assertRaises(RuntimeError) as cm:
+            self.gate._call("getUpdates", {})
+        self.assertEqual(str(cm.exception).split(":", 1)[0], "409")
 
 
 if __name__ == "__main__":

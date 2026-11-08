@@ -188,6 +188,23 @@ def parse_action(text: str) -> dict:
     raise ValueError("유효한 액션 JSON 없음")
 
 
+def _load_agents_md(root: str, max_chars: int) -> Optional[tuple]:
+    """워크스페이스 루트의 AGENTS.md (.AGENTS.md 도) → (파일명, 내용).
+    프로젝트 규칙을 시스템 프롬프트에 박아 넣는다. 없으면 None."""
+    for name in ("AGENTS.md", ".AGENTS.md"):
+        path = os.path.join(root, name)
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    body = f.read(max_chars + 1)
+                if not body.strip():
+                    return None
+                return (name, body[:max_chars])
+            except OSError:
+                return None
+    return None
+
+
 class Agent:
     def __init__(self, cfg: Config, confirmer: Optional[Callable[[str], bool]] = None,
                  progress=None):
@@ -196,6 +213,9 @@ class Agent:
         self.progress = progress if progress is not None else Progress(
             enabled=cfg.show_steps, details=cfg.show_details)
         system = SYSTEM_TEMPLATE.format(tools=tools.schema_text(), max_actions=cfg.max_actions)
+        am = _load_agents_md(cfg.workspace_root, cfg.agents_md_max_chars)
+        if am:
+            system += f"\n\n[프로젝트 규칙 — {am[0]} (필수 준수)]\n{am[1]}"
         saved = notes.load(cfg.memory_file)
         if saved:
             system += f"\n\n[기억된 참고 정보 — 변할 수 있는 상태는 현재 결과로 재확인]\n{saved[:cfg.memory_max_chars]}"
@@ -427,7 +447,7 @@ class Agent:
                     # 겪기 전에 실행 자체를 막아 반복 루프의 씨앗을 없앤다.
                     return f"[차단] {hint}"
             verdict = permissions.check_bash(cmd, cfg.permissions_mode)
-        elif name in ("write_file", "edit_file"):
+        elif name in ("write_file", "edit_file", "rollback"):
             verdict = permissions.check_write(cfg.permissions_mode)
         if not verdict:
             return None

@@ -1,6 +1,4 @@
 """autorcode 웹 UI — FastAPI/WebSocket 기반의 안정적인 브라우저 프론트엔드.
-
-기본은 127.0.0.1 바인딩 + 토큰 인증. 외부 노출은 reverse proxy/TLS 뒤에서만 쓴다.
 """
 import argparse
 import asyncio
@@ -184,71 +182,88 @@ HTML = """<!doctype html>
 <html lang="ko">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>autorcode web</title>
 <style>
 :root { color-scheme: dark; }
-body { margin:0; font-family: ui-sans-serif, system-ui, Apple SD Gothic Neo, Malgun Gothic, sans-serif; background:#111; color:#eee; }
-header { padding:10px 14px; border-bottom:1px solid #333; display:flex; gap:10px; align-items:center; }
-main { height: calc(100vh - 116px); overflow:auto; padding:12px; }
-form { position:fixed; bottom:0; left:0; right:0; display:flex; gap:8px; padding:10px; background:#181818; border-top:1px solid #333; }
-input { flex:1; padding:10px; border:1px solid #444; border-radius:8px; background:#0d0d0d; color:#eee; }
-button { padding:10px 12px; border:0; border-radius:8px; background:#2f6f3f; color:white; cursor:pointer; }
-button.secondary { background:#333; }
-button.danger { background:#7a2f2f; }
-.line { margin:6px 0; padding:8px; border-radius:8px; background:#1b1b1b; white-space:pre-wrap; word-break:break-word; }
-.event { color:#bbb; }
-.answer { background:#17301d; }
-.error { background:#3a1717; }
+* { box-sizing: border-box; }
+body { margin:0; font-family: ui-sans-serif, system-ui, Apple SD Gothic Neo, Malgun Gothic, sans-serif; background:#0f0f0f; color:#eee; }
+header { padding:8px 12px; border-bottom:1px solid #2a2a2a; background:#151515; }
+.toprow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.brand { font-weight:600; }
+.status { color:#9b9b9b; font-size:12px; }
+.menubar { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.menubar button { padding:6px 10px; border:1px solid #3a3a3a; border-radius:6px; background:#242424; color:#eee; font-size:13px; cursor:pointer; }
+.menubar button:hover { background:#303030; }
+.menubar button.active { background:#2f6bff; border-color:#4b84ff; }
+.menubar button.danger { background:#402020; border-color:#6a2f2f; }
+.menubar button.danger:hover { background:#4a2626; }
+.menubar button.green { background:#1f3a25; border-color:#2f6f3f; }
+main { height: calc(100vh - 156px); overflow:auto; padding:12px; }
+form { position:fixed; bottom:0; left:0; right:0; display:flex; gap:8px; padding:10px; background:#151515; border-top:1px solid #2a2a2a; }
+input { flex:1; padding:10px 12px; border:1px solid #3a3a3a; border-radius:8px; background:#0d0d0d; color:#eee; }
+form button { padding:10px 14px; border:1px solid #2f6f3f; border-radius:8px; background:#2f6f3f; color:#fff; cursor:pointer; }
+.line { margin:6px 0; padding:9px 10px; border-radius:8px; background:#1b1b1b; white-space:pre-wrap; word-break:break-word; line-height:1.6; }
+.event { color:#b9b9b9; }
+.answer { background:#16261b; }
+.error { background:#361c1c; }
 .approval { background:#33250d; }
 .approval .buttons { margin-top:8px; display:flex; gap:8px; }
-.small { color:#888; font-size:12px; }
-.toolbar { margin-left:auto; display:flex; gap:6px; align-items:center; }
-.toolbar button { padding:6px 10px; font-size:13px; background:#2a2a2a; border:1px solid #444; }
-.toolbar button:hover { background:#3a3a3a; }
-.toolbar .menuwrap { position:relative; }
-.dropdown { display:none; position:absolute; top:calc(100% + 6px); right:0; background:#222; border:1px solid #444; border-radius:8px; min-width:180px; z-index:50; box-shadow:0 8px 24px rgba(0,0,0,.5); }
-.dropdown.open { display:block; }
-.dropdown button { display:block; width:100%; text-align:left; border-radius:0; border:0; background:transparent; }
-.dropdown button:first-child { border-radius:8px 8px 0 0; }
-.dropdown button:last-child { border-radius:0 0 8px 8px; }
-.helpbox { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; z-index:100; }
-.helpbox.open { display:flex; }
-.helpbox .card { background:#1b1b1b; border:1px solid #444; border-radius:12px; padding:18px; max-width:520px; width:90%; max-height:80vh; overflow:auto; white-space:pre-wrap; }
+.approval .buttons button { padding:6px 10px; border-radius:6px; border:1px solid #444; background:#333; color:#eee; cursor:pointer; }
+.approval .buttons button.ok { background:#2f6f3f; border-color:#3f8f4f; }
+.approval .buttons button.no { background:#7a2f2f; border-color:#9a3f3f; }
 </style>
 </head>
 <body>
-<header><strong>autorcode web</strong><span id="status" class="small">연결 전</span>
-  <div class="toolbar">
-    <div class="menuwrap">
-      <button id="menuBtn" type="button">메뉴 ▾</button>
-      <div id="dropdown" class="dropdown">
-        <button type="button" data-act="pause">일시정지 / 계속</button>
-        <button type="button" data-act="compact">요약 (/compact)</button>
-        <button type="button" data-act="cancel">작업 취소 (/cancel)</button>
-        <button type="button" data-act="help">도움말</button>
-      </div>
-    </div>
-    <button id="websearch" type="button" title="입력창에 웹 검색 프롬프트를 채웁니다">🔍 검색</button>
-    <button id="pauseResume" type="button" title="에이전트 일시정지/계속">⏸</button>
-    <button id="compact" type="button" title="/compact">요약</button>
-    <button id="cancel" type="button" class="danger" title="/cancel">취소</button>
+<header>
+  <div class="toprow">
+    <div class="brand">autorcode web</div>
+    <div class="status" id="status">연결 전</div>
+  </div>
+  <div class="menubar" id="menubar">
+    <button onclick="sendCmd('/help')">도움말</button>
+    <button onclick="sendCmd('/model')">모델</button>
+    <button onclick="sendCmd('/sessions')">세션</button>
+    <button onclick="sendCmd('/theme')">테마</button>
+    <button onclick="sendCmd('/status')">상태</button>
+    <button onclick="sendCmd('/tools')">도구</button>
+    <button onclick="sendCmd('/clear')">화면지우기</button>
+    <button id="btnAuto" onclick="toggleAuto()">자율모드: ?</button>
+    <button id="btnApprove" onclick="toggleApprove()">전체승인: ?</button>
+    <button id="btnPause" onclick="togglePause()">일시정지</button>
+    <button onclick="sendCmd('/compact')">요약</button>
+    <button onclick="sendCmd('/cancel')" class="danger">취소</button>
+    <button onclick="sendCmd('/image')">그림</button>
+    <button onclick="sendCmd('/voice')">음성</button>
+    <button onclick="sendCmd('/duet')">듀엣</button>
+    <button onclick="sendCmd('/copy')">복사</button>
+    <button onclick="openWebSearch()">웹검색</button>
+    <button onclick="sendCmd('/quit')" class="danger">종료</button>
   </div>
 </header>
 <main id="log"></main>
 <form id="form">
-  <input id="input" placeholder="작업 입력 (/compact, /cancel 가능)" autocomplete="off">
+  <input id="input" placeholder="작업을 입력하세요" autocomplete="off" spellcheck="false">
   <button type="submit">전송</button>
 </form>
 <script>
 const token = localStorage.getItem('autorcode_web_token') || new URLSearchParams(location.search).get('token') || prompt('autorcode web token');
 if (token) localStorage.setItem('autorcode_web_token', token);
+
 const logEl = document.getElementById('log');
 const statusEl = document.getElementById('status');
 const form = document.getElementById('form');
 const input = document.getElementById('input');
-let ws;
-function add(cls, text) {
+const btnPause = document.getElementById('btnPause');
+const btnAuto = document.getElementById('btnAuto');
+const btnApprove = document.getElementById('btnApprove');
+
+let ws, paused=false, autoOn=false, approveOn=false;
+
+function add(cls, text){
   const div = document.createElement('div');
   div.className = 'line ' + cls;
   div.textContent = text;
@@ -256,112 +271,76 @@ function add(cls, text) {
   logEl.scrollTop = logEl.scrollHeight;
   return div;
 }
-function send(obj) {
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+function send(obj){ if(ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+function sendCmd(cmd){
+  if(cmd === '/pause'){ togglePause(true); return; }
+  if(cmd === '/resume'){ togglePause(false); return; }
+  send({type:'prompt', text:cmd});
+  input.focus();
 }
-function connect() {
+function togglePause(force){
+  if(force === true){ paused=false; }
+  else if(force === false){ paused=true; }
+  else { paused = !paused; }
+  send({type: paused ? 'pause' : 'resume'});
+  btnPause.textContent = paused ? '계속' : '일시정지';
+  btnPause.classList.toggle('green', !paused);
+  btnPause.classList.toggle('danger', paused);
+}
+function toggleAuto(){
+  autoOn = !autoOn;
+  send({type:'prompt', text: autoOn ? '/auto on' : '/auto off'});
+  btnAuto.textContent = '자율모드: ' + (autoOn ? 'ON' : 'OFF');
+  btnAuto.classList.toggle('active', autoOn);
+}
+function toggleApprove(){
+  approveOn = !approveOn;
+  send({type:'prompt', text: approveOn ? '/approve on' : '/approve off'});
+  btnApprove.textContent = '전체승인: ' + (approveOn ? 'ON' : 'OFF');
+  btnApprove.classList.toggle('active', approveOn);
+}
+function openWebSearch(){
+  const q = prompt('웹에서 검색할 내용을 입력하세요');
+  if(!q || !q.trim()) return;
+  send({type:'prompt', text: '웹에서 검색해서 정리해줘: ' + q.trim()});
+  add('event', '[웹검색] ' + q.trim());
+}
+
+form.onsubmit = (e)=>{
+  e.preventDefault();
+  const text = input.value.trim();
+  if(!text) return;
+  send({type:'prompt', text});
+  input.value='';
+};
+
+function connect(){
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(proto + '//' + location.host + '/ws?token=' + encodeURIComponent(token || ''));
-  ws.onopen = () => statusEl.textContent = '연결됨';
-  ws.onclose = () => {
-    statusEl.textContent = '연결 끊김';
-    setTimeout(connect, 1500);
-  };
-  ws.onmessage = (e) => {
+  ws.onopen = ()=> statusEl.textContent = '연결됨';
+  ws.onclose = ()=> { statusEl.textContent = '연결 끊김'; setTimeout(connect, 1500); };
+  ws.onmessage = (e)=>{
     const m = JSON.parse(e.data);
-    if (m.type === 'ready') add('event', 'ready · ' + m.model + ' · ' + m.workspace);
-    else if (m.type === 'status') statusEl.textContent = m.running ? '실행 중' : '대기';
-    else if (m.type === 'event') add('event', m.text);
-    else if (m.type === 'update') statusEl.textContent = m.message || m.label;
-    else if (m.type === 'thought') add('event', 'thought · ' + m.text);
-    else if (m.type === 'tool_start') add('event', 'tool · ' + m.label);
-    else if (m.type === 'result') add('event', 'result · ' + m.status + ' · ' + m.label + ' · ' + m.chars + '자');
-    else if (m.type === 'answer') add('answer', m.text);
-    else if (m.type === 'error') add('error', m.text);
-    else if (m.type === 'approval') {
-      const div = add('approval', '승인 필요\\n' + m.message);
+    if(m.type === 'ready'){ add('event', 'ready · ' + m.model + ' · ' + m.workspace); }
+    else if(m.type === 'status'){ statusEl.textContent = m.running ? '실행 중' : '대기'; }
+    else if(m.type === 'event'){ add('event', m.text); }
+    else if(m.type === 'thought'){ add('event', 'thought · ' + m.text); }
+    else if(m.type === 'tool_start'){ add('event', 'tool · ' + m.label); }
+    else if(m.type === 'result'){ add('event', 'result · ' + m.status + ' · ' + m.label + ' · ' + m.chars + '자'); }
+    else if(m.type === 'answer'){ add('answer', m.text); }
+    else if(m.type === 'error'){ add('error', m.text); }
+    else if(m.type === 'approval'){
+      const div = add('approval', '승인 필요\n' + m.message);
       const buttons = document.createElement('div');
       buttons.className = 'buttons';
-      const yes = document.createElement('button'); yes.textContent = '승인';
-      const no = document.createElement('button'); no.textContent = '거부'; no.className = 'danger';
-      yes.onclick = () => { send({type:'approve', id:m.id, ok:true}); yes.disabled = true; no.disabled = true; };
-      no.onclick = () => { send({type:'approve', id:m.id, ok:false}); yes.disabled = true; no.disabled = true; };
+      const yes = document.createElement('button'); yes.className='ok'; yes.textContent='승인';
+      const no = document.createElement('button'); no.className='no'; no.textContent='거부';
+      yes.onclick = ()=>{ send({type:'approve', id:m.id, ok:true}); yes.disabled=true; no.disabled=true; yes.textContent='승인됨'; };
+      no.onclick = ()=>{ send({type:'approve', id:m.id, ok:false}); yes.disabled=true; no.disabled=true; no.textContent='거부됨'; };
       buttons.appendChild(yes); buttons.appendChild(no); div.appendChild(buttons);
-    } else if (m.type === 'approval_timeout') add('error', '승인 시간 초과');
+    }else if(m.type === 'approval_timeout'){ add('error', '승인 시간 초과'); }
   };
 }
-form.onsubmit = (e) => {
-  e.preventDefault();
-  let text = input.value.trim();
-  if (!text) return;
-  if (text === '/cancel') send({type:'cancel'});
-  else if (text === '/compact') send({type:'compact'});
-  else {
-    if (text.startsWith('웹검색:') || text.startsWith('/')) { /* 그대로 */ }
-    else if (input.dataset.websearch === '1') text = '웹에서 검색해서 정리해줘: ' + text;
-    send({type:'prompt', text});
-  }
-  input.value = ''; delete input.dataset.websearch;
-};
-
-// ---- 상단 메뉴 ----
-const menuBtn = document.getElementById('menuBtn');
-const dropdown = document.getElementById('dropdown');
-const helpbox = document.createElement('div');
-helpbox.className = 'helpbox';
-helpbox.innerHTML = '<div class="card"><strong>명령 안내</strong>\\n\\n'
-  + '일반 입력 — 작업을 그대로 지시 (예: 벤치 돌려줘)\\n'
-  + '/compact — 지금까지 대화 요약·정리\\n'
-  + '/cancel — 실행 중 작업 취소\\n'
-  + '⏸ 버튼 — 에이전트 일시정지 / 계속\\n'
-  + '🔍 검색 버튼 — 입력을 웹 검색 작업으로 전송\\n\\n'
-  + '승인이 필요한 작업은 화면에 승인 카드가 뜹니다.\\n'
-  + '(같은 명령은 세션 안에서 한 번 승인하면 재문의 없이 진행)</div>';
-helpbox.onclick = () => helpbox.classList.remove('open');
-document.body.appendChild(helpbox);
-
-function toggleMenu(force) {
-  dropdown.classList.toggle('open', force);
-}
-menuBtn.onclick = (e) => { e.stopPropagation(); toggleMenu(); };
-document.addEventListener('click', () => toggleMenu(false));
-dropdown.querySelectorAll('button').forEach(b => {
-  b.onclick = () => {
-    const act = b.dataset.act;
-    if (act === 'pause') document.getElementById('pauseResume').click();
-    else if (act === 'compact') send({type:'compact'});
-    else if (act === 'cancel') send({type:'cancel'});
-    else if (act === 'help') helpbox.classList.add('open');
-    toggleMenu(false);
-  };
-});
-
-// '/' 키 → 메뉴 열기 (TUI 습관 그대로)
-document.addEventListener('keydown', (e) => {
-  const inInput = document.activeElement === input;
-  if (e.key === '/' && !inInput) { e.preventDefault(); toggleMenu(true); }
-  else if (e.key === 'Escape') { toggleMenu(false); helpbox.classList.remove('open'); }
-  else if (e.key === '/' && inInput && input.value === '') { e.preventDefault(); toggleMenu(true); }
-});
-
-// ---- 검색 버튼: 입력창을 웹 검색 모드로 ----
-document.getElementById('websearch').onclick = () => {
-  input.dataset.websearch = '1';
-  input.placeholder = '검색어를 입력하고 Enter (웹 검색으로 전송됩니다)';
-  input.focus();
-};
-
-// ---- 일시정지/계속 토글 ----
-let paused = false;
-const pauseBtn = document.getElementById('pauseResume');
-pauseBtn.onclick = () => {
-  paused = !paused;
-  send({type: paused ? 'pause' : 'resume'});
-  pauseBtn.textContent = paused ? '▶' : '⏸';
-  pauseBtn.title = paused ? '계속 실행' : '일시정지';
-};
-document.getElementById('cancel').onclick = () => send({type:'cancel'});
-document.getElementById('compact').onclick = () => send({type:'compact'});
 connect();
 </script>
 </body>
@@ -371,7 +350,12 @@ connect();
 
 @app.get("/")
 def index():
-    return HTMLResponse(HTML)
+    from fastapi import Response
+    return Response(content=HTML, media_type="text/html; charset=utf-8", headers={
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    })
 
 
 @app.get("/health")

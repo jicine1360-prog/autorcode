@@ -17,11 +17,37 @@ from urllib.parse import parse_qs, urlsplit
 
 log = logging.getLogger("autorcode.pcgate")
 TOKEN_PATH = os.path.expanduser("~/.autorcode/pcgate.token")
+TOKENS_DIR = os.path.expanduser("~/.autorcode/pcgate.tokens")
 try:
     with open(TOKEN_PATH, encoding="utf-8") as f:
         TOKEN = f.read().strip()
 except OSError:
     TOKEN = ""
+
+
+def _load_extra_tokens():
+    """make-agent.sh 가 발급한 고객별 토큰(pcgate.tokens/*.token).
+    디렉터리는 선택 — 없으면 빈 목록. 파일은 주 토큰과 같은 600 정책을 따른다."""
+    out = []
+    try:
+        names = sorted(os.listdir(TOKENS_DIR))
+    except OSError:
+        return out
+    for name in names:
+        if not name.endswith(".token"):
+            continue
+        path = os.path.join(TOKENS_DIR, name)
+        try:
+            if stat.S_IMODE(os.stat(path).st_mode) & 0o077:
+                log.warning("고객 토큰 권한이 600 아님, 건너뜀: %s", name)
+                continue
+            with open(path, encoding="utf-8") as f:
+                tok = f.read().strip()
+            if tok:
+                out.append(tok)
+        except OSError:
+            continue
+    return out
 
 ALLOWED = {"sysinfo", "disk", "procs", "updates", "speak", "lock", "sleep", "restart", "shutdown"}
 DANGEROUS = {"restart", "shutdown", "sleep"}
@@ -38,11 +64,13 @@ RESULTS = {}  # cmd_id -> {"status","output","ts"}
 LAST_POLL = {}  # pc -> ts
 LOCK = threading.Lock()
 AUTH_FAILS = {}  # source IP -> [monotonic timestamps]
+EXTRA_TOKENS = _load_extra_tokens()
 
 
 def _token_matches(candidate: object) -> bool:
     """Fail closed on missing token; compare without data-dependent timing."""
-    return bool(TOKEN) and isinstance(candidate, str) and hmac.compare_digest(candidate, TOKEN)
+    return (bool(TOKEN) and isinstance(candidate, str)
+            and any(hmac.compare_digest(candidate, t) for t in (TOKEN, *EXTRA_TOKENS)))
 
 
 _APPROVER = None          # 늦게 만든 텔레그램 승인 게이트 (None/False/ApprovalGate)
@@ -173,7 +201,9 @@ class Handler(BaseHTTPRequestHandler):
                 AUTH_FAILS.pop(ip, None)
             return True
         _record_auth_failure(ip)
-        log.warning("authentication failed client=%s path=%s", ip, urlsplit(self.path).path)
+        prefix = candidate[:8] if isinstance(candidate, str) and candidate else "(빈값)"
+        log.warning("authentication failed client=%s path=%s token_prefix=%s",
+                    ip, urlsplit(self.path).path, prefix)
         self._json(401, {"ok": False, "error": "토큰 불일치"})
         return False
 

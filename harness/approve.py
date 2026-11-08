@@ -137,6 +137,14 @@ class _Pending:
 # 게이트
 # ---------------------------------------------------------------------------
 
+def _error_description(e: urllib.error.HTTPError) -> str:
+    """HTTPError 본문(JSON)의 description. JSON 이 아니거나 읽기 실패면 reason 을 쓴다."""
+    try:
+        return str(json.loads(e.read() or b"{}").get("description") or "")
+    except Exception:
+        return ""
+
+
 class ApprovalGate:
     """`confirmer` 로 그대로 넘길 수 있는 callable.
 
@@ -180,8 +188,16 @@ class ApprovalGate:
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"},
         )
-        with self._opener(req, timeout=40) as r:
-            body = json.loads(r.read() or b"{}")
+        try:
+            with self._opener(req, timeout=40) as r:
+                body = json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            # 실제 텔레그램은 실패를 HTTP 상태 코드로 보낸다(409/401/429...). 즉
+            # 아래 ok:false 분기는 실제 서버에서는 한 번도 타지 않는다 — urllib 이
+            # 먼저 HTTPError 를 던져 버리기 때문이다. 테스트의 가짜 응답만 그 경로를
+            # 탔고, 그래서 409 를 보고 게이트를 끊어야 한다는 설계가 실제 서버에서
+            # 죽어 있었다(무한 재시도 + 로그 스팸). 아래와 같은 계약으로 정규화한다.
+            raise RuntimeError(f"{e.code}:{_error_description(e) or '실패'}") from None
         if not body.get("ok"):
             desc = body.get("description", "실패")
             code = int(body.get("error_code", 0) or 0)

@@ -1,14 +1,13 @@
 """voicehub 서버 스피커(play_local) 단위 테스트 — 가짜 Popen 으로 흐름만 검증."""
 import os
+import subprocess
 import sys
 import time
 import types
+import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-os.environ["VOICEHUB_MOCK"] = "1"
-os.environ["VOICEHUB_SPEAKER"] = "auto"
 
-import subprocess as _sp
 from harness import voicehub as vh
 
 calls = []
@@ -22,7 +21,7 @@ class FakePopen:
             close=lambda: calls.append("close"))
 
     def poll(self):
-        return 0
+        return None  # 아직 실행 중 → stop_local 이 terminate 를 걸러야 한다
 
     def terminate(self):
         calls.append("terminate")
@@ -38,35 +37,55 @@ class FakePopen:
         return False
 
 
-_REAL_POPEN = _sp.Popen
-_sp.Popen = FakePopen
-try:
-    cfg = vh.Config(mock=True)
-    hub = vh.Hub(cfg)
-    card = hub._speaker_card()
-    print("speaker_card =", card)
-    assert card.startswith("hw:"), "카드 자동선택 실패"
+class SpeakerTest(unittest.TestCase):
+    """가짜 Popen 은 테스트 안에서만 갈아끼운다.
 
-    hub.play_local(b"FAKEMP3" * 10)
-    time.sleep(0.3)
-    print("calls:", calls)
-    assert any(isinstance(c, tuple) and c[0] == "write" for c in calls), "mp3 전송 없음"
-    hub.stop_local()
-    print("OK: play_local/stop_local 흐름 통과")
+    모듈 최상단에서 subprocess.Popen 을 덮어쓰면 되돌리는 곳이 없어, 그 뒤에
+    import 되는 테스트 전부가 가짜 Popen 으로 실행돼 연쇄 파손된다 (pytest 는
+    collect 시점에 import 하므로 체감 증상이 더 기괴해진다).
+    """
 
-    cfg2 = vh.Config(mock=True, speaker="off")
-    hub2 = vh.Hub(cfg2)
-    assert hub2._speaker_card() == ""
-    hub2.play_local(b"x")
-    assert hub2._speaker_proc is None
-    print("OK: speaker=off 시 재생 안 함")
+    def setUp(self):
+        calls.clear()
+        self._popen = subprocess.Popen
+        subprocess.Popen = FakePopen
+        self.addCleanup(setattr, subprocess, "Popen", self._popen)
+        self._env = dict(os.environ)
+        self.addCleanup(os.environ.clear)
+        self.addCleanup(os.environ.update, self._env)
 
-    cfg3 = vh.Config(mock=True, speaker="hw:1,7")
-    hub3 = vh.Hub(cfg3)
-    assert hub3._speaker_card() == "hw:1,7"
-    print("OK: 카드 직접 지정 통과")
-finally:
-    # discovery 는 테스트 실행 전에 모든 모듈을 import 한다. 여기서 바꿔치기한
-    # Popen 을 되돌려 두지 않으면 이후 테스트(mcp·system_info·cli·bash)가
-    # 전부 FakePopen 을 물고 — 실제 프로세스 테스트가 줄줄이 죽는다.
-    _sp.Popen = _REAL_POPEN
+    def test_card_auto_select(self):
+        os.environ["VOICEHUB_MOCK"] = "1"
+        os.environ["VOICEHUB_SPEAKER"] = "auto"
+        card = vh.Hub(vh.Config(mock=True))._speaker_card()
+        if not card:
+            self.skipTest("재생 가능한 ALSA 카드가 없는 머신 — 자동선택 검증 불가")
+        self.assertTrue(card.startswith("hw:"), card)
+
+    def test_play_local_feeds_and_terminates(self):
+        os.environ["VOICEHUB_MOCK"] = "1"
+        os.environ["VOICEHUB_SPEAKER"] = "auto"
+        hub = vh.Hub(vh.Config(mock=True))
+        if not hub._speaker_card():
+            self.skipTest("재생 가능한 ALSA 카드가 없는 머신 — 실행 경로 검증 불가")
+        hub.play_local(b"FAKEMP3" * 10)
+        time.sleep(0.3)
+        self.assertTrue(any(isinstance(c, tuple) and c[0] == "write" for c in calls),
+                        calls)  # mp3 전송 없음
+        hub.stop_local()
+        self.assertIn("close", calls)
+        self.assertIn("terminate", calls)
+
+    def test_speaker_off_does_not_play(self):
+        hub = vh.Hub(vh.Config(mock=True, speaker="off"))
+        self.assertEqual(hub._speaker_card(), "")
+        hub.play_local(b"x")
+        self.assertIsNone(hub._speaker_proc)
+
+    def test_card_can_be_given_directly(self):
+        hub = vh.Hub(vh.Config(mock=True, speaker="hw:1,7"))
+        self.assertEqual(hub._speaker_card(), "hw:1,7")
+
+
+if __name__ == "__main__":
+    unittest.main()
