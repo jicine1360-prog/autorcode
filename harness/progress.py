@@ -43,6 +43,11 @@ def tool_label(name, args):
         detail = str(args.get("url", ""))
         if name == "youtube":
             detail += " · " + str(args.get("get", "info"))
+    elif name == "todo_write":
+        items = args.get("todos") or []
+        done = sum(1 for t in items if isinstance(t, dict)
+                   and str(t.get("status", "")).lower() in ("done", "completed", "complete"))
+        detail = f"계획 {len(items)}단계 · 완료 {done}" if items else "목록 비움"
     else:
         detail = str(args.get("path", "."))
         if name == "grep_files":

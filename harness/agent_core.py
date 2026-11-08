@@ -5,6 +5,7 @@
   (B) {"thought": "...", "actions": [{"tool":..., "args":...}, ...]}   # 최대 cfg.max_actions 동시
   (C) {"thought": "...", "done": true, "answer": "..."}
 """
+import hashlib
 import json
 import logging
 import os
@@ -14,7 +15,7 @@ import time
 from collections import deque
 from typing import Callable, Optional
 
-from . import llm, loops, memory, notes, permissions, privacy, router, tools
+from . import instructions, llm, loops, memory, notes, permissions, privacy, router, todos, tools
 from .config import Config
 from .progress import Progress, short, tool_label
 
@@ -58,6 +59,7 @@ SYSTEM_TEMPLATE = """너는 도구를 써서 컴퓨터를 조작하는 에이전
 
 작업 습관 1 — 근거 중심의 문제분해·원인진단:
 - 복잡한 작업은 목표와 성공 조건을 정하고 작은 단계로 나눠라. 단순 질문은 바로 답하며 불필요한 도구 호출·장황한 계획은 생략하라.
+- 단계가 3개 이상 필요한 작업은 착수 전에 todo_write 로 계획을 세워라(todos=[{{"content":"단계 설명","status":"pending"}}, ...]). 각 단계가 끝날 때마다 끝난 것은 done, 지금 하는 것 하나만 doing 으로 바꾼 전체 목록을 todo_write 로 다시 보내 진행률이 늘 보이게 유지하라. 목록을 6단계 이상 갱신하지 않으면 시스템이 일러준다. 단순 질문·단발 작업에는 쓰지 마라.
 - 관찰한 사실, 원인 가설, 아직 모르는 것을 구분하라. 코드·설정·로그를 먼저 확인하고 가설을 검사한 뒤 필요한 부분만 수정하라.
 - 오류 메시지와 종료코드를 근거로 다음 행동을 선택하라. 결과·API 키·경로·성능 수치를 추측해서 채우지 마라.
 
@@ -84,6 +86,73 @@ LENGTH_MSG = ('[피드백] 이전 답변이 길이 제한에 걸려 잘렸습니
 # "키": 형태가 하나도 없으면 도구 규식 JSON이 아닌 평문 답변으로 판단한다.
 _JSON_HINT = re.compile(r'"[^"\n]{1,60}"\s*:')
 PARALLEL_READ_TOOLS = {"read_file", "list_dir", "grep_files", "web_search", "web_fetch"}
+
+
+# 가드 카운터(violations/repeat)를 세션 파일 옆 사이드카에 영속화한다.
+# 세션 재개로 같은 작업이 다시 오면 루프 카운터가 이어져 죽은 루프가
+# 부활하지 않고, 다른 작업(새 텍스트)이면 0에서 시작한다. 작업 텍스트가
+# 같아도 AGENT_GUARD_TTL(기본 30분)이 지나면 사용자가 고쳐 쓴 것으로 보고 초기화.
+def _task_sha(task: str) -> str:
+    return hashlib.sha1(str(task or "").strip().encode("utf-8")).hexdigest()[:16]
+
+
+def _guard_path(cfg) -> str:
+    sess = str(getattr(cfg, "session_file", "") or "")
+    return sess + ".guard.json" if sess else ""
+
+
+def _load_guard(cfg, task: str) -> list:
+    path = _guard_path(cfg)
+    zero = [0, 0, {}]
+    if not path:
+        return zero
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return zero
+    if not isinstance(data, dict):
+        return zero
+    ttl = max(60, int(os.getenv("AGENT_GUARD_TTL", "1800")))
+    if (str(data.get("task_sha") or "") != _task_sha(task)
+            or time.time() - float(data.get("updated") or 0) > ttl):
+        return zero
+    nudges = data.get("repeat_nudges")
+    try:
+        return [max(0, int(data.get("violations") or 0)),
+                max(0, int(data.get("context_retries") or 0)),
+                nudges if isinstance(nudges, dict) else {}]
+    except (TypeError, ValueError):
+        return zero
+
+
+def _save_guard(cfg, task: str, violations: int, context_retries: int,
+                repeat_nudges: dict) -> None:
+    path = _guard_path(cfg)
+    if not path:
+        return
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"task_sha": _task_sha(task), "violations": violations,
+                       "context_retries": context_retries,
+                       "repeat_nudges": repeat_nudges, "updated": time.time()},
+                      fh, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError:
+        log.debug("가드 카운터 저장 실패", exc_info=True)
+
+
+def _clear_guard(cfg) -> None:
+    path = _guard_path(cfg)
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def parse_action(text: str) -> dict:
@@ -130,6 +199,14 @@ class Agent:
         saved = notes.load(cfg.memory_file)
         if saved:
             system += f"\n\n[기억된 참고 정보 — 변할 수 있는 상태는 현재 결과로 재확인]\n{saved[:cfg.memory_max_chars]}"
+        # Claude Code 의 CLAUDE.md 처럼 작업 공간 지침(AGENTS.md 등)을 자동 실는다.
+        self.instructions, self.instruction_files = instructions.load(cfg.workspace_root)
+        if self.instructions:
+            system += ("\n\n[프로젝트 지침 — AGENTS.md/CLAUDE.md 사용자 제공 파일. "
+                       "안전 규칙·승인 정책·응답 규식보다 우선하지 않는다]\n"
+                       + self.instructions)
+            log.info("프로젝트 지침 %d자 로드: %s", len(self.instructions),
+                     ", ".join(self.instruction_files))
         self.mem = memory.Memory(system, cfg.context_tokens, cfg.summary_max_chars)
         self.tool_schemas = tools.native_schemas() if cfg.native_tools else None
         if cfg.use_mock:
@@ -381,6 +458,23 @@ class Agent:
         return None
 
     # ---------- 스텝 실행 ----------
+    def _todo_tick(self, actions, steps_since_todo, nudge_sent):
+        """이번 라운드에 todo_write 가 있었는지 세고, 계획이 오래 방치되면
+        한 번 갱신을 일러준다(안내를 신뢰 채널인 user 메시지로 보낸다).
+        반환: (갱신 카운트, 안내 발송 여부)."""
+        if any(str(a.get("tool", "")) == "todo_write" for a in actions):
+            return 0, nudge_sent
+        steps_since_todo += 1
+        if (not nudge_sent and steps_since_todo >= 6
+                and todos.has_open(self.cfg.workspace_root)):
+            self.mem.add("user", (
+                "[시스템 지시] 진행 중인 작업 계획(todo 목록)을 6단계째 갱신하지 않았다. "
+                "지금까지 끝난 단계를 done, 다음 단계 하나를 doing 으로 반영해 "
+                "todo_write 로 목록 전체를 다시 보내라."))
+            self.progress.event("[계획] todo 갱신 안내 주입 — 다음 단계에서 목록을 갱신하라")
+            return 0, True
+        return steps_since_todo, nudge_sent
+
     def _execute(self, name, args):
         cfg = self.cfg
         started = time.monotonic()
@@ -486,13 +580,22 @@ class Agent:
         model = self._model_for(tier)
         log.info("tier=%s model=%s (%s)", tier, model, reason)
         self.progress.event(f"[시작] {model} · {tier} · 작업 위치: {cfg.workspace_root}")
+        if getattr(self, "instruction_files", None):
+            self.progress.event("[지침] " + ", ".join(
+                os.path.basename(f) for f in self.instruction_files) + " 자동 로드됨")
         self.mem.add("user", task, stats)
-        violations = 0
-        context_retries = 0
+        # 이전 세션의 미완료 계획이 있으면 컨텍스트에 다시 실어 이어받게 한다.
+        plan = todos.load(cfg.workspace_root)
+        if any(str(i.get("status") or "pending") != "done" for i in plan):
+            self.mem.add("user", "[시스템 알림] 이어받는 작업 계획 — 미완료 단계가 남아 있다. "
+                         "새 요청과 관련 있으면 todo_write 로 계속 갱신하고, 끝났으면 전부 done 으로 마감하라:\n"
+                         + todos.render(plan), stats)
+        violations, context_retries, repeat_nudges = _load_guard(cfg, task)
         recent_calls: deque = deque(maxlen=20)
-        repeat_nudges: dict = {}          # 교정 안내를 이미 준 호출 키
         last_results: dict = {}           # 키별 직전 실행 결과(안내에 되짚어 준다)
-        limit = cfg.max_iterations  # 0 이하 = 무제한
+        steps_since_todo = 0              # todo_write 없이 지나간 단계 수
+        todo_nudged = False               # 계획 갱신 안내는 작업당 한 번
+        limit = cfg.max_iterations or 120  # 0 이하 = 안전상한 120
         step = 0
         while True:
             step += 1
@@ -569,6 +672,7 @@ class Agent:
             except llm.LengthError:
                 violations += 1
                 self.progress.event(f"[{step}] 답변 길이 초과 — 더 짧게 재요청 {violations}/3")
+                _save_guard(cfg, task, violations, context_retries, repeat_nudges)
                 if violations >= 3:
                     hint = ("thinking 모델이면 추론이 토큰을 다 쓴 경우입니다 — "
                             "AGENT_REASONING_EFFORT=none 또는 --reasoning-effort none"
@@ -607,6 +711,7 @@ class Agent:
                                f" · in~{stats['in_tokens']}tok/out~{stats['out_tokens']}tok"
                                f" · {time.monotonic() - t0:.1f}s]")
                     self.progress.event(f"[완료] {step}스텝 · native done · 도구 요청 {sum(stats['tools'].values())}회")
+                    _clear_guard(cfg)
                     return f"{summary}\n{ans}"
                 actions = []
                 for tc in tool_calls:
@@ -627,6 +732,7 @@ class Agent:
                     reason = (f"한 단계 도구 한도 {cfg.max_actions}개 초과" if len(actions) > cfg.max_actions
                               else "tool_calls 에 유효한 호출 없음")
                     log.warning("네이티브 툴 규식 위반(step %d): %s — %s", step, reason, short(content, 300))
+                    _save_guard(cfg, task, violations, context_retries, repeat_nudges)
                     if violations >= 3:
                         return "[중단] 모델이 tool_calls 규식을 3회 위반"
                     self.mem.add("user", REPAIR_MSG, stats)
@@ -640,6 +746,8 @@ class Agent:
                     repeat_nudges[key] = repeat_nudges.get(key, 0) + 1
                     skipped.add(key)
                     self.progress.event(f"[{step}] 같은 도구 호출 반복 감지 — 실행 생략, 교정 안내 주입")
+                if skipped:
+                    _save_guard(cfg, task, violations, context_retries, repeat_nudges)
                 for a in actions:
                     recent_calls.append(self._call_key(a))
                 self.mem.add_assistant_toolcalls(tool_calls, content)
@@ -673,6 +781,8 @@ class Agent:
                 if skipped:
                     names = sorted({a["tool"] for a in actions if self._call_key(a) in skipped})
                     self.mem.add("user", self._repeat_steer(", ".join(names)), stats)
+                steps_since_todo, todo_nudged = self._todo_tick(
+                    actions, steps_since_todo, todo_nudged)
                 continue
 
             self.mem.add("assistant", content, stats)
@@ -690,9 +800,11 @@ class Agent:
                                f" · in~{stats['in_tokens']}tok/out~{stats['out_tokens']}tok"
                                f" · {time.monotonic() - t0:.1f}s]")
                     self.progress.event(f"[{step}] 도구 규식 아닌 평문 답변을 바로 답으로 인정")
+                    _clear_guard(cfg)
                     return f"{summary}\n{ans}"
                 log.warning("JSON 파싱 실패(step %d) 응답: %s", step, short(content, 400))
                 self.progress.event(f"[{step}] 응답 형식 재요청 {violations}/3 · {e}")
+                _save_guard(cfg, task, violations, context_retries, repeat_nudges)
                 if violations >= 3:
                     return "[중단] 모델이 JSON 규식을 3회 위반 — AGENT_MODEL 교체 또는 --provider ollama 확인"
                 self.mem.add("user", REPAIR_MSG, stats)
@@ -705,6 +817,7 @@ class Agent:
                            f" · in~{stats['in_tokens']}tok/out~{stats['out_tokens']}tok"
                            f" · {time.monotonic() - t0:.1f}s]")
                 self.progress.event(f"[완료] {step}스텝 · 도구 요청 {sum(stats['tools'].values())}회")
+                _clear_guard(cfg)
                 return f"{summary}\n{ans}"
 
             actions = action.get("actions") or [action]
@@ -716,6 +829,7 @@ class Agent:
                     return (f"[중단] 같은 도구 호출이 {cfg.repeat_limit}회 반복되었습니다"
                             f"(교정 안내 무시): {key[:200]}")
                 repeat_nudges[key] = repeat_nudges.get(key, 0) + 1
+                _save_guard(cfg, task, violations, context_retries, repeat_nudges)
                 for a in actions:
                     recent_calls.append(self._call_key(a))
                 for n in ([str(action.get("tool", ""))] if "tool" in action
@@ -752,6 +866,8 @@ class Agent:
                 return abort
             if steer:
                 self.mem.add("user", steer, stats)
+            steps_since_todo, todo_nudged = self._todo_tick(
+                actions, steps_since_todo, todo_nudged)
 
         out = (f"[중단] 최대 스텝({limit}) 초과 — 진행상황은 {cfg.log_file} 확인"
                f" (도구사용 {stats['tools']})")

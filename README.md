@@ -98,6 +98,26 @@ autorcode run --auto qwen3.8 "로그 정리 스크립트 만들어서 저장해�
 ```
 (`--yes`는 전부 자동승인, `--auto`는 안전한 것만. 기본 승인모드는 AGENT_PERMS로 조정)
 
+### 작업 계획 목록 (todo_write) — Claude Code의 TodoWrite 스타일
+여러 단계 작업에서 에이전트가 계획 목록을 직접 세우고 단계마다 상태를 갱신한다.
+착수 전 `todo_write(todos=[{"content":"...","status":"pending"}...])` 로 계획 수립 →
+단계가 끝날 때마다 끝난 것은 `done`, 지금 하는 것 하나만 `doing`으로 전체 목록을 다시 보낸다.
+```bash
+autorcode run qwen3.8 "백업 스크립트 만들어서 저장하고 테스트해줘"   # 진행률이 [2/4 완료] 형태로 갱신됨
+```
+- 목록은 작업공간별 `~/.autorcode/todo_<해시>.json` — 세션 재개 후에도 살아남는다
+- 새 작업 시작 시 미완료 단계가 있으면 "이어받는 작업 계획"으로 컨텍스트에 다시 실린다
+- 6단계 이상 목록을 갱신하지 않으면 시스템이 한 번 갱신을 일러준다
+- REPL/TUI에서 `/todo` 목록 확인 · `/todo clear` 초기화
+- 단순 질문·단발 작업에는 쓰지 않도록 규칙이 시스템 프롬프트에 들어 있다
+
+### 프로젝트 지침 자동 로드 (AGENTS.md / CLAUDE.md)
+Claude Code가 `CLAUDE.md`를 읽듯이, 작업 공간의 지침 파일을 시스템 프롬프트에 자동으로 싣는다.
+- **전역**: `~/.autorcode/AGENTS.md` (모든 작업에 공통)
+- **작업 공간**: 현재 폴더에서 `/`까지 올라가며 `AGENTS.md` · `CLAUDE.md` · `.autorcode/instructions.md` 를 주움 — 작업 공간에 가까운(구체적인) 지침이 뒤에 강하게 실린다
+- 실행 시 `[지침] AGENTS.md 자동 로드됨` 표시, 총 상한 `AGENT_INSTRUCTIONS_MAX_CHARS` (기본 8000자)
+- 지침은 사용자 제공 파일로 대우 — 안전 규칙·승인 정책·응답 규식을 덮지 않는다
+
 ### MCP 도구 생태계 연결
 `~/.autorcode/mcp.json`에 서버를 등록하면 남들 만든 MCP 도구를 그대로 사용한다.
 ```json
@@ -395,6 +415,8 @@ AGENT_LOOP_LIMIT(3)            # 카운터만 바꾼 같은 실패 3회 연속 �
 AGENT_BLOCK_SELF_COPY(1)       # 같은 호스트 rsync/scp 차단 → cp 안내 (0=허용)
 AGENT_REASONING_EFFORT(none)   # thinking 모델 추론 제어: none·low·medium·high (로컬 기본 none)
 AGENT_SHOW_STEPS(1) AGENT_SHOW_DETAILS(0) AGENT_STREAM(1) AGENT_NATIVE_TOOLS(1)   # 0/1
+AGENT_INSTRUCTIONS_MAX_CHARS(8000)  # AGENTS.md/CLAUDE.md 합산 상한
+AGENT_GUARD_TTL(1800)               # 세션 재개 시 위반 카운터 이어받기 유효시간(초)
 ```
 `~/.autorcode/env` 에 `KEY=VALUE` 를 한 줄씩 넣어 두면 실행할 때마다 자동으로 읽는다
 (이미 설정된 sh export / systemd Environment 가 우선 — **API 토큰은 넣지 말 것**).
@@ -403,7 +425,7 @@ AGENT_SHOW_STEPS(1) AGENT_SHOW_DETAILS(0) AGENT_STREAM(1) AGENT_NATIVE_TOOLS(1) 
 ## 개발/테스트
 ```bash
 python3 -m compileall -q harness agent.py
-python3 -m unittest discover -s tests -v     # 137개 · CI: GitHub Actions (.github/workflows/test.yml)
+python3 -m unittest discover -s tests -v     # 307개 · CI: GitHub Actions (.github/workflows/test.yml)
 ```
 
 ## 문의/협업

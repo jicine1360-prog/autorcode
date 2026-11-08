@@ -235,7 +235,8 @@ GPU 없이 즉시 사용 (OpenRouter — 모델명 '/' 포함)
   모델 요청 즉시 대기 표시 → 응답 수신량(글자 수) → 도구 실행 → 결과/시간 표시
   터미널에서는 경과 시간 갱신, 파이프/로그에서는 5초마다 진행 상태 한 줄
   진행은 stderr, 최종 답변은 stdout. 원시 추론이나 미완성 JSON은 표시하지 않음
-  대화 중 /status /tools /steps on|off /details on|off /help 사용 가능
+  대화 중 /status /tools /steps on|off /details on|off /todo /help 사용 가능
+  작업 폴더의 AGENTS.md · CLAUDE.md 는 시스템 프롬프트에 자동 로드 (~/.autorcode/AGENTS.md 공통)
   업데이트 뒤에는 exit 후 다시 실행해야 새 기능이 적용됨
 
 TUI 모드 (autorcode tui · Textual 필요: pip install 'autorcode[tui]')
@@ -243,7 +244,7 @@ TUI 모드 (autorcode tui · Textual 필요: pip install 'autorcode[tui]')
   Ctrl+G 그림 첨부(컬러 미리보기 + OCR) · Esc 작업 취소 · Ctrl+Q 종료
   /voice 음성방 — 폰/PC 브라우저 마이크와 같은 대화(터미널은 자막·타이핑 참여)
   /duet <주제> 봇끼리 대화 — 로이와 봇이 자동 티키타카 (중단 /duet stop)
-  슬래시: /help /model /sessions /theme /status /tools /clear /auto /pause /resume /cancel /compact /copy /image /voice /duet /quit
+  슬래시: /help /model /sessions /theme /status /tools /clear /auto /pause /resume /cancel /compact /copy /image /voice /duet /todo /quit
   모델 선택기: ollama 설치분 + OpenAI 호환 서버(GET /v1/models)를 한 목록으로
     — 선택하면 그 서버 백엔드로 즉시 전환 (AGENT_BASE_URL 기본 서버 포함)
   도구 실행은 카드, 파일 편집은 diff, 승인은 모달로 표시
@@ -508,11 +509,20 @@ def repl_command(task, agent):
     """로컬 명령은 모델 호출 없이 즉시 처리한다."""
     parts = task.split()
     command = parts[0] if parts else ""
-    if command not in ("/help", "/status", "/tools", "/steps", "/details"):
+    if command not in ("/help", "/status", "/tools", "/steps", "/details", "/todo"):
         return False
     if command == "/help":
         print("/status 상태 · /tools 도구 목록 · /steps on|off 과정 표시 · "
-              "/details on|off 결과 확대 · exit 종료")
+              "/details on|off 결과 확대 · /todo [clear] 작업 계획 · exit 종료")
+    elif command == "/todo":
+        from . import todos as todos_mod
+        if len(parts) == 2 and parts[1] == "clear":
+            todos_mod.clear(agent.cfg.workspace_root)
+            print("작업 계획 목록을 비웠습니다.")
+        else:
+            items = todos_mod.load(agent.cfg.workspace_root)
+            print(todos_mod.render(items, todos_mod.load_note(agent.cfg.workspace_root))
+                  if items else "작업 계획 목록은 비어 있습니다. (에이전트가 todo_write 로 만듭니다)")
     elif command == "/tools":
         print(tools.schema_text())
     elif command == "/status":

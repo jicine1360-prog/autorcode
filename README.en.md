@@ -96,6 +96,24 @@ autorcode run --auto qwen3.8 "write a log cleanup script and save it"
 ```
 (`--yes` auto-approves everything, `--auto` only safe ones. Default approval mode is set via AGENT_PERMS)
 
+### Task plan checklist (todo_write) — Claude Code's TodoWrite, reimagined
+For multi-step work the agent builds its own plan and updates it as it goes:
+`todo_write(todos=[{"content":"...","status":"pending"}...])` before starting, then
+flip finished steps to `done` and exactly one active step to `doing` on every round.
+- The list lives at `~/.autorcode/todo_<hash>.json` per workspace — it survives session resumes
+- On a new run, unfinished items are re-injected as "[시스템 알림] 이어받는 작업 계획"
+- If the plan goes untouched for 6+ steps the agent gets one nudge to refresh it
+- `/todo` shows the list in REPL/TUI · `/todo clear` resets it
+- The system prompt tells it to skip the checklist for trivial one-shot questions
+
+### Project instructions auto-load (AGENTS.md / CLAUDE.md)
+Like Claude Code reading `CLAUDE.md`, autorcode injects instruction files into the system prompt:
+- **Global**: `~/.autorcode/AGENTS.md` (applies to every workspace)
+- **Workspace**: walking up from the cwd to `/`, it picks up `AGENTS.md`, `CLAUDE.md`,
+  `.autorcode/instructions.md` — the closer (more specific) file is injected later, stronger
+- Total cap `AGENT_INSTRUCTIONS_MAX_CHARS` (default 8000); a run prints `[지침] AGENTS.md 자동 로드됨`
+- Instructions are user-provided data — they never override safety rules or approval policy
+
 ### MCP tool ecosystem
 Register servers in `~/.autorcode/mcp.json` and autorcode uses third-party MCP tools directly.
 ```json
@@ -248,6 +266,8 @@ AGENT_LOOP_LIMIT(3)            # same failure with only a counter changed 3x →
 AGENT_BLOCK_SELF_COPY(1)       # block same-host rsync/scp → suggest cp (0=allow)
 AGENT_REASONING_EFFORT(none)   # thinking models: none·low·medium·high (local default none)
 AGENT_SHOW_STEPS(1) AGENT_SHOW_DETAILS(0) AGENT_STREAM(1) AGENT_NATIVE_TOOLS(1)   # 0/1
+AGENT_INSTRUCTIONS_MAX_CHARS(8000)  # combined cap for AGENTS.md / CLAUDE.md files
+AGENT_GUARD_TTL(1800)               # seconds a resumed session may inherit guard counters
 ```
 Put `KEY=VALUE` lines in `~/.autorcode/env` and they are loaded on every start
 (an existing sh export / systemd Environment always wins — **never put API tokens there**).
@@ -256,7 +276,7 @@ Full list: `autorcode help`
 ## Development / tests
 ```bash
 python3 -m compileall -q harness agent.py
-python3 -m unittest discover -s tests -v     # 137 tests · CI: GitHub Actions (.github/workflows/test.yml)
+python3 -m unittest discover -s tests -v     # 307 tests · CI: GitHub Actions (.github/workflows/test.yml)
 ```
 
 ## Contact / collaboration

@@ -16,7 +16,7 @@ import 하는 시점이 아니라 ``run_tui`` 호출 시점에 안내 메시지�
    Ctrl+V     텍스트 붙여넣기(여러 줄은 한 줄로 합침)
    /voice     음성방 참여 — 폰/PC 브라우저 마이크와 같은 대화(터미널은 자막·타이핑으로 참여)
    /duet      봇끼리 대화 — /duet <주제> 로 로이와 봇이 자동 대화(각자 다른 목소리), /duet stop 중단
-   슬래시     /help /model /sessions /theme /status /tools /clear /auto /approve /pause /resume /cancel /compact /copy /image /voice /duet /quiet /quit
+   슬래시     /help /model /sessions /theme /status /tools /clear /auto /approve /pause /resume /cancel /compact /copy /image /voice /duet /quiet /todo /quit
 """
 import difflib
 import glob
@@ -31,7 +31,49 @@ from contextlib import contextmanager
 
 from harness.progress import Activity, clean, result_status, short
 
+# ------------------------------------------------------------------ 드래그-떼면 즉시 복사
+# Textual Screen._selecting(드래그 중)이 False로 바뀌는(마우스 뗀) 시점을 가로채
+# 선택 텍스트를 _copy_text 흐름(OSC52+사본 파일)으로 자동 복사한다.
+# Textual 은 선택 의존성이므로 import 를 run() 시점으로 미룬다.
+_drag_copy_installed = False
 
+
+def _install_drag_copy():
+    """run() 안에서만 호출 — Textual 을 import 해서 패치를 걺."""
+    global _drag_copy_installed
+    if _drag_copy_installed:
+        return
+    _drag_copy_installed = True
+
+    from textual.screen import Screen
+
+    from textual.message import Message
+
+    class SelectionReleased(Message):
+        def __init__(self, text: str) -> None:
+            self.text = text
+            super().__init__()
+
+    _orig_watch_selecting = Screen._watch__selecting
+
+    def _patched_watch_selecting(screen, selecting: bool) -> None:
+        if not selecting:
+            try:
+                snap = screen.get_selected_text()
+                if snap and snap.strip() and screen.app is not None:
+                    from textual.app import App
+
+                    if isinstance(screen.app, App):
+                        screen.app.post_message(SelectionReleased(snap))
+            except Exception:
+                pass
+        _orig_watch_selecting(screen, selecting)
+
+    Screen._watch__selecting = _patched_watch_selecting
+
+
+
+# ------------------------------------------------------------------ API 확인
 # ------------------------------------------------------------------ API 확인
 def _require_textual():
     try:
@@ -1019,6 +1061,16 @@ def _build_app_classes():
                 from harness import tools as tools_mod
                 self._notice(f"도구 {len(tools_mod.TOOLS)}개: " +
                              ", ".join(sorted(tools_mod.TOOLS)))
+            elif cmd == "/todo":
+                from harness import todos as todos_mod
+                if rest == "clear":
+                    todos_mod.clear(self.cfg.workspace_root)
+                    self._notice("작업 계획 목록을 비웠습니다", "ok")
+                else:
+                    items = todos_mod.load(self.cfg.workspace_root)
+                    text = todos_mod.render(items, todos_mod.load_note(self.cfg.workspace_root))
+                    self._mount(AssistantMessage("[작업 계획]\n" + text if items
+                                                 else "작업 계획 목록은 비어 있습니다."))
             elif cmd == "/auto":
                 self.cfg.auto_smart = rest not in ("off", "0", "false")
                 self._notice(f"자율 모드 {'on' if self.cfg.auto_smart else 'off'}")
@@ -1153,6 +1205,9 @@ def _build_app_classes():
                 self._notice("복사할 선택이 없습니다 — 마우스로 드래그해 선택하세요", "warn")
                 return
             self._copy_text(text)
+
+        def on_selection_released(self, event):
+            self._copy_text(event.text)
 
         def _selected_text(self):
             try:
@@ -1667,6 +1722,7 @@ def _ensure_app():
 
 def run(cfg, model="", permissions=None):
     _require_textual()
+    _install_drag_copy()
     App = _ensure_app()
     App(cfg, model=model, permissions=permissions).run()
     return 0

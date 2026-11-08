@@ -15,6 +15,7 @@ from . import geo
 from . import goals
 from . import profile
 from . import study
+from . import todos as todos_mod
 from . import vision
 
 log = logging.getLogger("agent.tools")
@@ -330,6 +331,8 @@ def _grep_files(args: Args, root: str, max_output: int, timeout: int) -> str:
             try:
                 if os.path.getsize(fp) > 2_000_000:
                     continue
+                if fn.lower().endswith((".pdf", ".xlsx", ".xls", ".docx", ".png", ".jpg", ".jpeg")):
+                    continue  # 이진 문서/이미지는 grep 대상 아님
                 with open(fp, encoding="utf-8", errors="replace") as f:
                     for ln, line in enumerate(f, 1):
                         if rx.search(line):
@@ -372,6 +375,15 @@ def _memory_reflect(_args, root, max_output, timeout):
 
 def _memory_save_summary(args, root, max_output, timeout):
     return notes.set_summary(str(args.get("summary", "")))
+
+
+def _todo_write(args, root, max_output, timeout):
+    raw = args.get("todos")
+    if raw is None:
+        return ('[오류] todos 인자가 필요합니다. 예: '
+                'todos=[{"content":"로그 파일 확인","status":"done"},'
+                '{"content":"회전 규칙 추가","status":"doing"}]')
+    return _cap(todos_mod.write(root, raw, str(args.get("note", "") or "")), max_output)
 
 
 def _schedule_add(args, root, max_output, timeout):
@@ -438,8 +450,11 @@ def _excel_summary(args, root, max_output, timeout):
     path = safety.confine(str(args.get("path", "")), root)
     if not os.path.isfile(path):
         return f"[오류] 파일 없음: {args.get('path')}"
+    if path.lower().endswith(".pdf"):
+        # PDF는 pdftotext로 위임
+        return _pdf_read(args, root, max_output, timeout)
     if not path.lower().endswith(".xlsx"):
-        return "[오류] .xlsx 파일만 지원"
+        return "[오류] .xlsx/.pdf 파일만 지원"
     sheet_name = str(args.get("sheet") or "")
     try:
         from openpyxl import load_workbook
@@ -479,14 +494,12 @@ def _excel_summary(args, root, max_output, timeout):
     sums = []
     for j in range(ncol):
         total = 0
-        ok = True
+        has_num = False
         for r in ws.iter_rows(values_only=True):
             if j < len(r) and isinstance(r[j], (int, float)):
                 total += r[j]
-            elif j < len(r) and r[j] is not None:
-                ok = False
-                break
-        if ok:
+                has_num = True
+        if has_num:
             sums.append(f"{rows_out[0][j] if j < len(rows_out[0]) else ''}={round(total, 4)}")
     if sums:
         lines.append("숫자합계: " + ", ".join(sums))
@@ -521,7 +534,14 @@ def _excel_write(args, root, max_output, timeout):
         data_rows = [[ln] for ln in rows]
     for r, cells in enumerate(data_rows, 1):
         for c, val in enumerate(cells, 1):
-            cell = ws.cell(row=r, column=c, value=val)
+            # 숫자처럼 보이면 숫자로 저장 (엑셀에서 합계 가능)
+            v = val
+            if r > 1 and re.fullmatch(r'-?\d+(\.\d+)?', val.replace(',', '')):
+                try:
+                    v = float(val.replace(',', '')) if '.' in val else int(val.replace(',', ''))
+                except ValueError:
+                    pass
+            cell = ws.cell(row=r, column=c, value=v)
             if r == 1:
                 cell.font = Font(bold=True)
     for col in ws.columns:
@@ -734,6 +754,49 @@ def _live_models(timeout: int) -> str:
     return "\n".join("  " + ln for ln in lines)
 
 
+def _subagent(args: Args, root: str, max_output: int, timeout: int) -> str:
+    """독립 autorcode 인스턴스에 작업을 위임한다. tasks 목록이면 병렬 실행.
+
+    서브는 자동승인(--yes)·세션 분리(--no-session)로 돌고, 최종 답변만
+    텍스트로 돌려준다. 안전 블랙리스트(safety.py)는 그대로 적용된다.
+    """
+    if os.getenv("AUTORCODE_SUBAGENT_CHILD") == "1":
+        return "[오류] 서브 안에서 서브 호출 불가 (재귀 방지)"
+    tasks = args.get("tasks") or ([str(args["task"])] if args.get("task") else [])
+    tasks = [str(t).strip() for t in tasks if str(t).strip()]
+    if not tasks:
+        return "[오류] task 또는 tasks 필수"
+    model = str(args.get("model") or os.getenv("AGENT_SUBAGENT_MODEL", "")).strip()
+    tmo = int(args.get("timeout") or os.getenv("AGENT_SUBAGENT_TIMEOUT", "600"))
+    cli = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli.py")
+
+    def one(task: str) -> str:
+        cmd = [sys.executable, cli, "run"]
+        if model:
+            cmd.append(model)
+        cmd.append(task)
+        cmd += ["--yes", "--quiet", "--no-session"]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=tmo, cwd=root,
+                               env={**os.environ, "AUTORCODE_SUBAGENT_CHILD": "1"})
+            out = (p.stdout or "").strip()
+            if p.returncode != 0:
+                return f"[서브 exit {p.returncode}] {(out or (p.stderr or '').strip()[-300:] or '출력 없음')}"
+            return out or "[출력 없음]"
+        except subprocess.TimeoutExpired:
+            return f"[서브 타임아웃 {tmo}s]"
+        except Exception as e:
+            return f"[서브 오류] {type(e).__name__}: {e}"
+
+    if len(tasks) == 1:
+        return _cap(f"### 서브 결과\n{one(tasks[0])}", max_output)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(4, len(tasks))) as ex:
+        results = list(ex.map(one, tasks))
+    return _cap("\n\n".join(f"### 작업 {i+1}: {t[:80]}\n{r}"
+                          for i, (t, r) in enumerate(zip(tasks, results))), max_output)
+
+
 TOOLS: Dict[str, ToolFn] = {
     "bash": _bash,
     "system_info": _system_info,
@@ -743,7 +806,9 @@ TOOLS: Dict[str, ToolFn] = {
     "read_file": _read_file,
     "write_file": _write_file,
     "edit_file": _edit_file,
+    "todo_write": _todo_write,
     "list_dir": _list_dir,
+    "subagent": _subagent,
     "find_files": _find_files,
     "disk_usage": _disk_usage,
     "grep_files": _grep_files,
@@ -779,7 +844,9 @@ SCHEMAS = {
     "read_file": "args: {path:str, max_lines?:int} — 번호 매긴 파일 읽기",
     "write_file": "args: {path:str, content:str} — 파일 생성/전체 저장",
     "edit_file": "args: {path:str, old_string:str, new_string:str, replace_all?:bool, whole_word?:bool} — 부분 치환 (whole_word=true면 단어 단위만)",
+    "todo_write": "args: {todos:list, note?:str} — 여러 단계 작업의 계획 목록 작성/갱신(전체 교체). todos=[{\"content\":\"단계 설명\",\"status\":\"pending|doing|done\"}] 형태. 착수 전에 계획 수립, 단계가 끝날 때마다 상태 반영(doing 은 하나만). 단발 작업·단순 질문에는 쓰지 말 것",
     "list_dir": "args: {path?:str} — 디렉터리 목록",
+    "subagent": "args: {task:str, tasks?:[str], model?:str, timeout?:int} — 독립 autorcode 인스턴스에 작업 위임(tasks 여러 개면 병렬). 서브는 자동승인으로 돌고 최종 답변만 돌려준다. 긴 작업·병렬 조사용",
     "grep_files": "args: {pattern:str, path?:str, max_matches?:int} — 정규식 내용 검색",
     "system_info": "args: {section?:'all'|'host'|'cpu'|'mem'|'gpu'|'models'|'disk'} — 지금 실행 중인 기기의 라이브 상태(CPU/RAM/GPU VRAM/상주 모델/디스크). 설치 목록이 아니라 구동 중 값",
     "service_status": "args: {state?:'all'|'active'|'failed'|'inactive'} — 서버의 사용자 서비스 상태 조회 (읽기 전용)",
