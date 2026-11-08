@@ -188,11 +188,17 @@ class Bot:
         if not m:
             return
         chat_id = int(((m.get("chat") or {}).get("id") or 0))
+        ctype = str((m.get("chat") or {}).get("type") or "")
+        sender = int(((m.get("from") or {}).get("id") or 0))
         if chat_id <= 0:
-            # 그룹/채널은 아직 지원하지 않는다 — 조용히 넘기지 말고 로그만 남긴다.
-            log.info("그룹/채널 chat(%s) 메시지는 무시(개인 채팅만 지원)", chat_id)
-            return
-        if chat_id not in self._allowed:
+            # 그룹/채널: 허용 목록에 -100... id 가 없어도, 발신자가 허용 사용자면
+            # 그 채팅을 읽는다(가족 단톡방 등). 답도 같은 채팅으로 간다.
+            if ctype in ("group", "supergroup") and sender in self._allowed:
+                log.info("그룹 chat(%s) 메시지 — 허용 사용자 %s 발신, 처리", chat_id, sender)
+            else:
+                log.info("그룹/채널 chat(%s) 메시지는 무시(발신 %s 미허용)", chat_id, sender)
+                return
+        elif chat_id not in self._allowed:
             self._on_unknown(chat_id, m)
             return
         if m.get("location"):
@@ -392,8 +398,35 @@ class Bot:
                     front.append(hint)
                 task = "\n\n".join(front) + "\n---\n새 요청: " + text
                 self.send(chat_id, f"작업 시작 🛠 ({len(text)}자)\n승인이 필요하면 버튼이 올라옵니다.")
-                result = agent.run(task)
-                self.send(chat_id, result)
+                # 워치독: 작업이 정체되면 취소 요청 → `_busy` 즉시 해제로
+                # 이후 요청이 "이미 작업 중" 으로 계속 막히는 것을 방지한다.
+                timeout = int(os.getenv("AGENT_TASK_TIMEOUT", "900"))
+                box: dict = {"result": None}
+                done = threading.Event()
+
+                def _runner():
+                    try:
+                        box["result"] = agent.run(task)
+                    except Exception as e:
+                        box["result"] = f"작업 중 오류: {str(e)[:_TEXT_LIMIT]}"
+                    finally:
+                        done.set()
+
+                th = threading.Thread(target=_runner, daemon=True, name="tg-agent")
+                th.start()
+                if not done.wait(timeout):
+                    agent.cancel()
+                    self.send(
+                        chat_id,
+                        f"[시간 초과] {timeout // 60}분을 넘겨 작업 취소를 요청했습니다. "
+                        "정리 안내 후 잠깐 마무리 대기합니다(이후 지연 종료는 결과를 반영하지 않습니다). "
+                        "바로 다른 요청을 보내셔도 됩니다.")
+                    with self._lock:
+                        self._busy = False
+                    th.join(timeout=max(60, timeout // 6))
+                    return
+                th.join()
+                self.send(chat_id, box["result"] or "완료 (결과 없음)")
         except Exception as e:
             log.exception("작업 실패 (chat %s)", chat_id)
             self.send(chat_id, f"작업 중 오류: {str(e)[:_TEXT_LIMIT]}")
