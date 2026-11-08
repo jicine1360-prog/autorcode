@@ -99,7 +99,10 @@ class MessageDispatchTest(unittest.TestCase):
     def test_work_runs_agent_and_replies(self):
         self.b._dispatch(_msg(555, "디스크 확인해줘"))
         self.assertTrue(_await(lambda: len(self.agent.runs) == 1))
-        self.assertIn("ANSWER(1)", self.api.sent_texts()[-1])
+        # 회신은 에이전트 완료 "후"에 나간다 — 시작 알림만 떠 있는 상태에서 바로 보면
+        # 느린 CI 에서 경합한다. 회신 텍스트가 도착할 때까지 기다린다.
+        self.assertTrue(_await(lambda: self.api.sent_texts()
+                               and "ANSWER(1)" in self.api.sent_texts()[-1]))
         # 회신은 명령을 보낸 chat 으로 간다
         self.assertEqual(self.api.calls[-1][1]["chat_id"], 555)
 
