@@ -1,0 +1,522 @@
+"""텔레그램 폰 비서 — 승인 게이트와 명령 수신을 하나의 폴러로 합친다.
+
+telegram getUpdates 는 토큰당 소비자(폴러)가 한 명이어야 한다(409 충돌).
+approve.py 의 ApprovalGate 는 callback_query 만 폴링하므로, 이 모듈이 두 일을
+대신한다:
+
+  - callback_query(승인 버튼 탭) → gate.feed() 로 넘겨 기존 검증 그대로 사용
+  - message(사용자 명령)      → Agent 를 실행하고 결과를 같은 chat 으로 회신
+
+같은 봇 토큰으로 별도 폴러를 띄우지 않는 한 어디서 만든 Agent 든 승인 요청은
+이 봇의 폴러가 받아 실행된다. 표준 라이브러리만 쓴다(pip 설치 금지 제약).
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+import threading
+import time
+import urllib.parse
+import urllib.request
+from typing import Callable, Optional
+
+from . import goals
+from . import location as loc
+from . import profile
+from . import schedule as sched
+from . import study
+from .voice import transcribe as voice_transcribe
+from .agent_core import Agent
+from .approve import ApprovalGate, DEFAULT_TIMEOUT, GateUnavailable, load_config
+from .config import Config, load as load_config_env
+from .notes import chat as mem_chat
+from .notes import load_for, scope as mem_scope
+from .progress import Progress
+from .telegram import CONFIG_PATH, collect_status
+
+log = logging.getLogger("agent.bot")
+
+API_BASE = os.getenv("AUTORCODE_TELEGRAM_API", "https://api.telegram.org")
+_TEXT_LIMIT = 3900
+# 폰 비서 전용 봇 설정. telegram.json(리포트/구승인 게이트 공용 토큰)은 openclaw
+# 등의 다른 폴러와 공유되므로, 봇은 별도 @BotFather 발급 토큰을 기본으로 쓴다.
+BOT_CONFIG = os.path.expanduser("~/.autorcode/bot.json")
+HELP = (
+    "autorcode 폰 비서에 오신 것을 환영합니다 🦜\n\n"
+    "명령이 아닌 텍스트는 전부 작업 지시로 실행됩니다.\n"
+    "/status  서버 상태 요약\n"
+    "/report  일일 리포트 전송\n"
+    "/help    이 도움말\n\n"
+    "민감한 명령은 여기서 승인/거부 버튼을 눌러 결정하고,\n"
+    "거부하면 실행되지 않습니다.\n\n"
+    "'근처/주변'은 내 위치 기준으로 알려드려요.\n"
+    "'위치'라고 보내시면 공유 버튼이 올라옵니다.\n"
+    "'이번 달 ~~가 목표야' 라고 하면 장기 목표로 등록하고 주기적으로 점검해요.\n"
+    "사진을 보내면(설명 첨부 가능) 로컬 VLM 으로 내용·텍스트를 읽어줘요.\n"
+    "음성 메모도 들어요 — 말하면 로컬 whisper 로 받아적어서 실행해요.\n"
+    "답변/번역 언어는 폰별 설정 — '언어를 영어로 해줘' 로 바꿀 수 있어요."
+)
+_LOC_WORDS = ("위치", "gps", "좌표", "지금 있는 곳")
+_LOC_NEAR_WORDS = ("근처", "주변", "가까운")
+
+
+def _default_workspace() -> str:
+    path = os.path.expanduser(os.getenv("AUTORCODE_BOT_WORKSPACE", "~/autorcode-bot"))
+    os.makedirs(path, exist_ok=True)
+    return os.path.realpath(path)
+
+
+class Bot:
+    """텔레그램 명령 수신 + 승인 버튼 처리를 한 폴러로 처리하는 비서."""
+
+    def __init__(
+        self,
+        token: str,
+        allowed: list[int],
+        gate: Optional[ApprovalGate] = None,
+        api_base: str = API_BASE,
+        opener: Optional[Callable] = None,
+        agent_factory: Optional[Callable[[], Agent]] = None,
+        workspace: Optional[str] = None,
+    ):
+        self._token = token
+        self._allowed = set(allowed)
+        self._owner = int(allowed[0]) if allowed else 0
+        self._notified: set[int] = set()
+        self._api = api_base.rstrip("/")
+        self._opener = opener or urllib.request.urlopen
+        self._gate = gate or ApprovalGate(token, list(self._allowed))
+        self._agent_factory = agent_factory
+        self._workspace = workspace or _default_workspace()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._offset: Optional[int] = None
+        self._busy = False
+        self._lock = threading.Lock()
+        self._pending: dict[str, str] = {}
+
+    # -- Telegram API ------------------------------------------------------
+
+    def _call(self, method: str, payload: dict):
+        url = f"{self._api}/bot{self._token}/{method}"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with self._opener(req, timeout=40) as r:
+            body = json.loads(r.read() or b"{}")
+        if not body.get("ok"):
+            desc = body.get("description", "실패")
+            code = int(body.get("error_code", 0) or 0)
+            raise RuntimeError(f"{code}:{desc}")
+        return body.get("result")
+
+    def send(self, chat_id: int, text: str, reply_markup=None) -> bool:
+        """회신. 실패해도 폴러를 죽이지 않는다(가급적 로그만 남긴다)."""
+        try:
+            payload = {
+                "chat_id": chat_id,
+                "text": text[:_TEXT_LIMIT],
+                "disable_web_page_preview": True,
+            }
+            if reply_markup is not None:
+                payload["reply_markup"] = reply_markup
+            self._call("sendMessage", payload)
+            return True
+        except Exception as e:
+            log.warning("전송 실패 (chat %s): %s", chat_id, e)
+            return False
+
+    # -- 수명주기 ----------------------------------------------------------
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._poll, name="tg-bot", daemon=True)
+        self._thread.start()
+        threading.Thread(target=self._sched_loop, name="tg-sched", daemon=True).start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    # -- 폴러 --------------------------------------------------------------
+
+    def _poll(self) -> None:
+        log.info("텔레그램 폴러 시작 (허용 %d명)", len(self._allowed))
+        while not self._stop.is_set():
+            try:
+                payload = {"timeout": 30,
+                           "allowed_updates": ["message", "edited_message", "callback_query"]}
+                if self._offset is not None:
+                    payload["offset"] = self._offset
+                updates = self._call("getUpdates", payload) or []
+
+                for u in updates:
+                    uid = int(u.get("update_id", 0))
+                    self._offset = uid + 1 if self._offset is None else max(self._offset, uid + 1)
+                    try:
+                        self._dispatch(u)
+                    except Exception:
+                        log.exception("업데이트 처리 실패")
+
+                if not updates:
+                    self._stop.wait(0.5)
+            except RuntimeError as e:
+                code = str(e).split(":", 1)[0]
+                if code in ("409", "401"):
+                    log.error("폴러 종료(회복 불가): %s", e)
+                    return
+                log.warning("폴링 실패: %s", e)
+                self._stop.wait(3)
+            except Exception as e:
+                log.warning("폴링 오류: %s", e)
+                self._stop.wait(3)
+        log.info("텔레그램 폴러 종료")
+
+    # -- 분배 --------------------------------------------------------------
+
+    def _dispatch(self, update: dict) -> None:
+        if update.get("callback_query"):
+            if self._gate is not None:
+                self._gate.feed(update)
+            return
+
+        m = update.get("message") or update.get("edited_message")
+        if not m:
+            return
+        chat_id = int(((m.get("chat") or {}).get("id") or 0))
+        if chat_id <= 0:
+            # 그룹/채널은 아직 지원하지 않는다 — 조용히 넘기지 말고 로그만 남긴다.
+            log.info("그룹/채널 chat(%s) 메시지는 무시(개인 채팅만 지원)", chat_id)
+            return
+        if chat_id not in self._allowed:
+            self._on_unknown(chat_id, m)
+            return
+        if m.get("location"):
+            threading.Thread(target=self._on_location,
+                             args=(chat_id, m["location"]), daemon=True).start()
+            return
+        caption = str(m.get("caption") or "").strip()
+        if m.get("photo"):
+            threading.Thread(target=self._on_photo,
+                             args=(chat_id, m, caption), daemon=True).start()
+            return
+        voice = m.get("voice") or m.get("audio")
+        if voice:
+            threading.Thread(target=self._on_voice,
+                             args=(chat_id, voice, caption), daemon=True).start()
+            return
+        text = str(m.get("text") or "").strip()
+        if not text:
+            return
+        self._handle(chat_id, text)
+
+    def _on_unknown(self, chat_id: int, m: dict) -> None:
+        """허용목록 밖 개인 채팅 — 조용히 버리지 말고 1회 안내 + 관리자에게 알림.
+
+        봇을 공유받은 사람이 말을 걸었는데 아무 답도 못 받는 상황을 막는다.
+        같은 chat 에는 한 번만 답하고(스팸 방지), 관리자(첫 허용 chat)에게
+        추가용 chat id 를 알려준다.
+        """
+        f = m.get("from") or {}
+        who = (f"@{f['username']}" if f.get("username")
+               else f.get("first_name") or "알 수 없음")
+        log.warning("허용되지 않은 chat(%s, %s) 메시지 — 안내+알림", chat_id, who)
+        if chat_id in self._notified:
+            return
+        self._notified.add(chat_id)
+        self.send(chat_id,
+                  "안녕하세요! 이 봇은 등록된 가족만 쓸 수 있어요.\n"
+                  "관리자에게 아래 번호를 알려주시면 등록해 드릴게요.\n"
+                  f"내 chat id: {chat_id}")
+        if self._owner and self._owner != chat_id:
+            self.send(self._owner,
+                      f"🔔 새 사람이 봇에 말을 걸었어요: {who} (chat id {chat_id})\n"
+                      f"등록하려면 서버의 ~/.autorcode/bot.env > AGENTUPBOT_CHAT 에 "
+                      f"{chat_id} 추가 후 봇 재시작.")
+
+    # -- 미디어 ------------------------------------------------------------
+
+    def _save_remote(self, chat_id: int, file_id: str, prefix: str = "inbox") -> Optional[str]:
+        """getFile → 다운로드 → 워크스페이스 저장. 실패 시 None."""
+        if not file_id:
+            return None
+        try:
+            info = self._call("getFile", {"file_id": file_id}) or {}
+            remote = str(info.get("file_path") or "")
+            if not remote:
+                log.warning("getFile 에 file_path 없음 (chat %s)", chat_id)
+                return None
+            url = f"{self._api}/file/bot{self._token}/{urllib.parse.quote(remote, safe='')}"
+            with self._opener(urllib.request.Request(url), timeout=60) as r:
+                data = r.read()
+            ext = os.path.splitext(remote)[1] or ".jpg"
+            name = f"{prefix}_{chat_id}_{int(time.time())}{ext}"
+            path = os.path.join(self._workspace, name)
+            with open(path, "wb") as f:
+                f.write(data)
+            return path
+        except Exception as e:
+            log.warning("미디어 저장 실패(chat %s): %s", chat_id, e)
+            return None
+
+    def _photo_path(self, chat_id: int, m: dict) -> Optional[str]:
+        """텔레그램 사진(가장 큰 크기)을 워크스페이스 inbox 에 저장 → 경로(또는 None)."""
+        photos = m.get("photo") or []
+        if not photos:
+            return None
+        best = max(photos, key=lambda p: int(p.get("file_size") or 0))
+        return self._save_remote(chat_id, str(best.get("file_id") or ""), "inbox")
+
+    def _on_photo(self, chat_id: int, m: dict, caption: str) -> None:
+        path = self._photo_path(chat_id, m)
+        if not path:
+            self.send(chat_id, "사진을 받긴 했는데 저장에 실패했어요. 다시 시도 부탁해요.")
+            return
+        rel = os.path.relpath(path, self._workspace)
+        lang = profile.language(str(chat_id))
+        q = caption or (f"사진 속 문자를 읽어줘. 읽은 언어가 {lang}이 아니면 "
+                        f"{lang}(으)로 번역해서 원문과 함께 보여줘")
+        self._handle(chat_id, f"[사진 도착] 파일: {rel}\n요청: {q}")
+
+    def _on_voice(self, chat_id: int, voice: dict, caption: str) -> None:
+        """음성 메모 → 로컬 whisper STT → 텍스트로 작업 실행."""
+        path = self._save_remote(chat_id, str(voice.get("file_id") or ""), "voice")
+        if not path:
+            self.send(chat_id, "음성을 받았는데 저장에 실패했어요. 다시 시도 부탁해요.")
+            return
+        self.send(chat_id, "🎙 음성 인식 중…")
+        text = voice_transcribe(path)
+        if text.startswith("[오류]"):
+            self.send(chat_id, text + "\n(음성 대신 텍스트로 보내주시면 바로 처리할게요)")
+            return
+        if not text:
+            self.send(chat_id, "음성을 들었는데 내용이 안 들려요. 크게 다시 한 번?")
+            return
+        req = f"{text}\n{caption}".strip() if caption else text
+        self._handle(chat_id, req)
+
+    # -- 명령 --------------------------------------------------------------
+
+    def _handle(self, chat_id: int, text: str) -> None:
+        cmd = text.split(maxsplit=1)[0]
+        if cmd in ("/start", "/help"):
+            self.send(chat_id, HELP)
+            return
+        if cmd in ("/status", "/report"):
+            self.send(chat_id, collect_status())
+            return
+
+        if loc.load(chat_id) is None and self._loc_intent(text):
+            self._pending[str(chat_id)] = text
+            self._ask_location(chat_id)
+            return
+
+        with self._lock:
+            if self._busy:
+                self.send(chat_id, "이미 작업 중입니다. 하나씩만 받을 수 있어요 — 끝나면 다시 보내주세요.")
+                return
+            self._busy = True
+        threading.Thread(target=self._work, args=(chat_id, text), daemon=True, name="tg-task").start()
+
+    @staticmethod
+    def _loc_intent(text: str) -> bool:
+        low = text.lower()
+        return (any(w in low for w in _LOC_WORDS)
+                or any(w in text for w in _LOC_NEAR_WORDS))
+
+    def _ask_location(self, chat_id: int) -> None:
+        """위치 미등록 상태인데 위치가 필요한 요청 → 공유 버튼을 띄운다."""
+        markup = {
+            "keyboard": [[{"text": "📍 현재 위치 보내기", "request_location": True}]],
+            "one_time_keyboard": True,
+            "resize_keyboard": True,
+        }
+        self.send(chat_id, "현재 위치를 등록하면 '근처/주변'이 그 기준으로 동작해요.\n아래 버튼을 눌러 위치를 보내주세요.", markup)
+
+    def _on_location(self, chat_id: int, m: dict) -> None:
+        """사용자가 공유한 위치 저장 — 역지오코딩 후 안내, 대기 중인 질문이 있으면 실행."""
+        try:
+            lat = float(m.get("latitude") or 0)
+            lon = float(m.get("longitude") or 0)
+            if not lat and not lon:
+                return
+            rec = loc.store(chat_id, lat, lon)
+            where = rec["name"] or f"{lat:.5f}, {lon:.5f}"
+            queued = self._pending.pop(str(chat_id), None)
+            tail = "\n받아둔 질문을 이 위치 기준으로 실행할게요." if queued else ""
+            self.send(chat_id, f"📍 위치 저장: {where}{tail}")
+            if queued:
+                self._handle(chat_id, queued)
+        except Exception as e:
+            log.exception("위치 저장 실패 (chat %s)", chat_id)
+
+    # -- 스케줄 알림 --------------------------------------------------------
+
+    def _sched_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                for chat_id, text in sched.scan_due(self._workspace):
+                    self.send(chat_id, f"⏰ 일정: {text}")
+                goals_dir = os.path.expanduser(
+                    os.getenv("AUTORCODE_GOALS_DIR", "~/.autorcode"))
+                for chat_id, text in goals.scan_due(goals_dir):
+                    self.send(chat_id, f"🎯 {text}")
+            except Exception:
+                log.exception("스케줄/목표 알림 오류")
+            self._stop.wait(20)
+
+    # -- 작업 --------------------------------------------------------------
+
+    def _work(self, chat_id: int, text: str) -> None:
+        try:
+            with mem_scope(str(chat_id)), sched.scope(str(chat_id)):
+                if self._gate is not None:
+                    self._gate.current_chat = chat_id
+                agent = self._agent_factory() if self._agent_factory else self._default_agent()
+                mem = load_for(str(chat_id))
+                now = sched.now_seoul().strftime("%Y-%m-%d %H:%M (%A)")
+                front = [f"[현재 시각(서울)] {now}"]
+                front.append(f"[이 사용자의 언어] {profile.language(str(chat_id))}"
+                             " — 답변·사진 번역을 이 언어로 해라")
+                maybe_loc = loc.describe(chat_id)
+                if maybe_loc:
+                    front.append(f"[이 사용자의 최근 위치]\n{maybe_loc}")
+                if mem:
+                    front.append(f"[{chat_id} 사용자에게 기억하고 있는 것]\n{mem}")
+                hint = study.hint(str(chat_id))
+                if hint:
+                    front.append(hint)
+                task = "\n\n".join(front) + "\n---\n새 요청: " + text
+                self.send(chat_id, f"작업 시작 🛠 ({len(text)}자)\n승인이 필요하면 버튼이 올라옵니다.")
+                # 워치독: 작업이 정체되면 취소 요청 → `_busy` 즉시 해제로
+                # 이후 요청이 "이미 작업 중" 으로 계속 막히는 것을 방지한다.
+                timeout = int(os.getenv("AGENT_TASK_TIMEOUT", "900"))
+                box: dict = {"result": None}
+                done = threading.Event()
+
+                def _runner():
+                    try:
+                        box["result"] = agent.run(task)
+                    except Exception as e:
+                        box["result"] = f"작업 중 오류: {str(e)[:_TEXT_LIMIT]}"
+                    finally:
+                        done.set()
+
+                th = threading.Thread(target=_runner, daemon=True, name="tg-agent")
+                th.start()
+                if not done.wait(timeout):
+                    agent.cancel()
+                    self.send(
+                        chat_id,
+                        f"[시간 초과] {timeout // 60}분을 넘겨 작업 취소를 요청했습니다. "
+                        "정리 안내 후 잠깐 마무리 대기합니다(이후 지연 종료는 결과를 반영하지 않습니다). "
+                        "바로 다른 요청을 보내셔도 됩니다.")
+                    with self._lock:
+                        self._busy = False
+                    th.join(timeout=max(60, timeout // 6))
+                    return
+                th.join()
+                self.send(chat_id, box["result"] or "완료 (결과 없음)")
+        except Exception as e:
+            log.exception("작업 실패 (chat %s)", chat_id)
+            self.send(chat_id, f"작업 중 오류: {str(e)[:_TEXT_LIMIT]}")
+        finally:
+            with self._lock:
+                self._busy = False
+            if self._gate is not None:
+                self._gate.current_chat = None
+
+    def _default_agent(self) -> Agent:
+        """전화 작업 기본 에이전트.
+
+        전용 workspace + 폰(chat)별 세션/기억 파일로, 작업이 바뀌어도 이 폰의
+        이전 파악 내용·기억을 이어받는다. LLM 백엔드는 AGENT_PROVIDER=ollama 기본.
+        """
+        os.environ.setdefault("AGENT_PROVIDER", "ollama")
+        cfg: Config = load_config_env()
+        cfg.workspace_root = self._workspace
+        if not cfg.session_file:
+            c = mem_chat()
+            key = c if c else hashlib.md5(self._workspace.encode()).hexdigest()[:10]
+            cfg.session_file = os.path.expanduser(f"~/.autorcode/session_{key}.jsonl")
+            os.makedirs(os.path.dirname(cfg.session_file), exist_ok=True)
+        cfg.show_steps = False  # stderr 로 나가지 않게 (폰에서는 먼저 실행 결과만)
+        return Agent(cfg, confirmer=self._gate, progress=Progress(enabled=False))
+
+
+def _env_token() -> Optional[str]:
+    """환경변수 봇 토큰. AGENTUPBOT_TOKEN 또는 AUTORCODE_BOT_TOKEN.
+
+    토큰을 git 에 두지 않고(공개 repo) env/EnvironmentFile 로 넘기는 흐름.
+    """
+    return (os.environ.get("AGENTUPBOT_TOKEN")
+            or os.environ.get("AUTORCODE_BOT_TOKEN") or "").strip() or None
+
+
+def _env_chats() -> Optional[list[int]]:
+    """환경변수 허용 chat 목록. 단일 또는 쉼표/공백 구분 여러 명(가족).
+
+    AGENTUPBOT_CHATS 를 우선하고, 없으면 AGENTUPBOT_CHAT 을 쓴다.
+    """
+    raw = (os.environ.get("AGENTUPBOT_CHATS")
+           or os.environ.get("AGENTUPBOT_CHAT") or "").strip()
+    chats: list[int] = []
+    for part in raw.replace(",", " ").split():
+        try:
+            chats.append(int(part))
+        except ValueError:
+            log.warning("무시된 chat id: %r (숫자 아님)", part)
+    return chats or None
+
+
+def build_bot(path: Optional[str] = None, **kw) -> Optional[Bot]:
+    """설정에서 봇을 만든다. 구성 문제가 있으면 None(fail-closed).
+
+    우선순위:
+      1. env AGENTUPBOT_TOKEN(/AUTORCODE_BOT_TOKEN) — 토큰을 git/파일 대신
+         환경변수(EnvironmentFile 등)로 넘기는 흐름. chat 은 AGENTUPBOT_CHAT,
+         없으면 기존 telegram.json 의 chat 을 재사용.
+      2. ~/.autorcode/bot.json (전용 토큰)
+      3. 예전 호환 telegram.json — 단, 그 토큰을 openclaw 등이 폴링 중이면
+         409 로 포기한다(사용자에게 새 봇을 만들라고 안내).
+
+    게이트가 직접 폴링해서는 안 되므로 build_from_config 를 쓰지 않고,
+    로딩은 load_config 로, 게이트는 폴링 없이 손수 만든다. 폴러는 Bot 이 소유한다.
+    """
+    token = _env_token()
+    if token is not None:
+        chats = _env_chats()
+        if not chats:
+            # telegram.json 은 같은 사람의 chat 목록이 담겨 있을 수 있다 → 재사용
+            try:
+                chats = load_config(CONFIG_PATH)["allowed"]
+            except Exception:
+                chats = []
+        if not chats:
+            log.warning("AGENTUPBOT_TOKEN 은 있지만 chat id 를 모릅니다 — "
+                        "AGENTUPBOT_CHATS(또는 CHAT) 를 설정하세요")
+            return None
+        gate = ApprovalGate(token, chats, timeout=DEFAULT_TIMEOUT)
+        log.info("봇 토큰: 환경변수 (AGENTUPBOT_TOKEN, 허용 %d명)", len(chats))
+        return Bot(token, chats, gate=gate, **kw)
+
+    if path is None:
+        path = BOT_CONFIG if os.path.exists(BOT_CONFIG) else CONFIG_PATH
+    if not os.path.exists(path):
+        log.info("폰 비서 미사용: 텔레그램 설정 없음 (%s)", path)
+        return None
+    try:
+        cfg = load_config(path)
+    except GateUnavailable as e:
+        log.warning("폰 비서 사용 안 함: %s", e)
+        return None
+    except Exception:
+        log.exception("폰 비서 설정 읽기 실패")
+        return None
+
+    gate = ApprovalGate(cfg["token"], cfg["allowed"], timeout=cfg["timeout"])
+    return Bot(cfg["token"], cfg["allowed"], gate=gate, **kw)
