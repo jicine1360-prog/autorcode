@@ -66,7 +66,7 @@ SYSTEM_TEMPLATE = """너는 도구를 써서 컴퓨터를 조작하는 에이전
 작업 습관 2 — 실행·검증·수정의 완결:
 - 변경 후 관련 테스트나 실제 요청으로 성공 조건을 확인하라. 코드 수정은 동작 테스트, 서비스 복구는 프로세스와 API 응답, 파일 생성은 내용·형식 검사를 사용하라.
 - 실패하면 원인 가설과 수정안을 갱신하고 다시 확인하라. 같은 실패를 근거 없이 반복하지 마라.
-- 도구 제약이나 출력 잘림을 만나면 지원하는 인자·도구로 전환하라. 같은 내용을 반복 조회하거나 없는 인자를 만들어 재시도하지 마라.
+- 도구 제약이나 출력 잘림을 만나면 지원하는 인자·도구로 전환하라. 같은 내용을 반복 조회하거나 없는 인자를 만들어 재시도하지 마라. 상태 확인을 기다려야 하면 `sleep 초; 확인명령` 한 번으로 확인하고, 직전과 결과가 같으면 '변화 없음'으로 결론 내려 보고하라.
 - 문법 통과, 명령 접수, dry-run 성공은 실제 동작 성공과 구분하라. 실행하지 않은 테스트를 통과했다고 보고하지 마라.
 - 최종 답변은 바꾼 점·실제로 확인한 결과·남은 미확인을 간결하게 알려라. 내부 사고 과정을 길게 나열하지 마라.
 
@@ -83,15 +83,22 @@ SYSTEM_TEMPLATE = """너는 도구를 써서 컴퓨터를 조작하는 에이전
 REPAIR_MSG = '[규칙 위반] (A)/(B)/(C) 중 순수 JSON 하나만 출력하라. 설명·펜스 금지.'
 LENGTH_MSG = ('[피드백] 이전 답변이 길이 제한에 걸려 잘렸습니다. 같은 목표를 '
               '(A)/(B)/(C) 규식으로 120자 내외의 짧고 완결된 JSON 하나로 다시 출력하라.')
+WRAPUP_MSG = ('[시스템 지시] 같은 도구 호출이 반복되어 더 진행할 수 없다. 도구를 더 호출하지 말고 '
+              '지금까지 확인한 결과만으로 최종 보고를 작성하라. 형식: 1) 확인한 사실 2) 판단·결론 '
+              '3) 남은 작업·권고. 확인하지 못한 것은 추측하지 말고 모른다고 밝혀라.')
+TASK_SWITCH_MSG = ('[작업 전환] 이전 작업에서 같은 도구 호출 반복이 차단된 기록이 있다. 새 요청에서 '
+                   '명시적으로 그 상태를 다시 측정하라고 하지 않는 한 마지막 반복 명령을 재실행하지 '
+                   '말고, 차단된 결과는 직전 결과로 간주하고 지금 요청에 맞게 새 계획으로 답하라.')
 # "키": 형태가 하나도 없으면 도구 규식 JSON이 아닌 평문 답변으로 판단한다.
 _JSON_HINT = re.compile(r'"[^"\n]{1,60}"\s*:')
 PARALLEL_READ_TOOLS = {"read_file", "list_dir", "grep_files", "web_search", "web_fetch"}
 
 
-# 가드 카운터(violations/repeat)를 세션 파일 옆 사이드카에 영속화한다.
-# 세션 재개로 같은 작업이 다시 오면 루프 카운터가 이어져 죽은 루프가
-# 부활하지 않고, 다른 작업(새 텍스트)이면 0에서 시작한다. 작업 텍스트가
-# 같아도 AGENT_GUARD_TTL(기본 30분)이 지나면 사용자가 고쳐 쓴 것으로 보고 초기화.
+# 가드 카운터를 세션 파일 옆 사이드카에 영속화한다.
+# - violations/context_retries 는 같은 작업만 이어받는다. 새 요청은 0에서 시작.
+# - repeat_nudges 는 같은 세션의 작업 전환을 넘어서도 TTL 동안 유지한다.
+#   교정을 2번 무시한 호출은 다음 새 요청에서도 즉시 차단해야 예전 monitor
+#   루프가 재발하지 않기 때문이다.
 def _task_sha(task: str) -> str:
     return hashlib.sha1(str(task or "").strip().encode("utf-8")).hexdigest()[:16]
 
@@ -101,58 +108,100 @@ def _guard_path(cfg) -> str:
     return sess + ".guard.json" if sess else ""
 
 
-def _load_guard(cfg, task: str) -> list:
-    path = _guard_path(cfg)
-    zero = [0, 0, {}]
-    if not path:
-        return zero
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        return zero
-    if not isinstance(data, dict):
-        return zero
-    ttl = max(60, int(os.getenv("AGENT_GUARD_TTL", "1800")))
-    if (str(data.get("task_sha") or "") != _task_sha(task)
-            or time.time() - float(data.get("updated") or 0) > ttl):
-        return zero
-    nudges = data.get("repeat_nudges")
-    try:
-        return [max(0, int(data.get("violations") or 0)),
-                max(0, int(data.get("context_retries") or 0)),
-                nudges if isinstance(nudges, dict) else {}]
-    except (TypeError, ValueError):
-        return zero
-
-
-def _save_guard(cfg, task: str, violations: int, context_retries: int,
-                repeat_nudges: dict) -> None:
+def _write_guard(cfg, task_sha: str, violations: int, context_retries: int,
+                 repeat_nudges: dict, updated: float) -> None:
     path = _guard_path(cfg)
     if not path:
         return
     try:
+        cleaned = {}
+        for key, value in list(repeat_nudges.items())[-200:]:
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                cleaned[str(key)] = value
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"task_sha": _task_sha(task), "violations": violations,
+            json.dump({"task_sha": task_sha, "violations": violations,
                        "context_retries": context_retries,
-                       "repeat_nudges": repeat_nudges, "updated": time.time()},
+                       "repeat_nudges": cleaned, "updated": updated},
                       fh, ensure_ascii=False)
         os.replace(tmp, path)
     except OSError:
         log.debug("가드 카운터 저장 실패", exc_info=True)
 
 
+def _load_guard_data(cfg, task: str) -> tuple:
+    path = _guard_path(cfg)
+    if not path:
+        return 0, 0, {}, False
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return 0, 0, {}, False
+    if not isinstance(data, dict):
+        return 0, 0, {}, False
+    ttl = max(60, int(os.getenv("AGENT_GUARD_TTL", "1800")))
+    updated = float(data.get("updated") or 0)
+    if time.time() - updated > ttl:
+        return 0, 0, {}, False
+    same_task = str(data.get("task_sha") or "") == _task_sha(task)
+    nudges = data.get("repeat_nudges")
+    repeat_nudges = nudges if isinstance(nudges, dict) else {}
+    violations = max(0, int(data.get("violations") or 0)) if same_task else 0
+    context_retries = max(0, int(data.get("context_retries") or 0)) if same_task else 0
+    locked = False
+    for value in repeat_nudges.values():
+        try:
+            if int(value or 0) >= 2:
+                locked = True
+                break
+        except (TypeError, ValueError):
+            continue
+    switched = not same_task and locked
+    return violations, context_retries, repeat_nudges, switched
+
+
+def _load_guard(cfg, task: str) -> list:
+    violations, context_retries, repeat_nudges, _ = _load_guard_data(cfg, task)
+    return [violations, context_retries, repeat_nudges]
+
+
+def _save_guard(cfg, task: str, violations: int, context_retries: int,
+                repeat_nudges: dict) -> None:
+    _write_guard(cfg, _task_sha(task), violations, context_retries,
+                 repeat_nudges, time.time())
+
+
 def _clear_guard(cfg) -> None:
     path = _guard_path(cfg)
-    if path:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+    if not path:
+        return
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        data = {}
+    nudges = data.get("repeat_nudges") if isinstance(data, dict) else {}
+    nudges = nudges if isinstance(nudges, dict) else {}
+    try:
+        locked = {str(k): int(v) for k, v in nudges.items() if int(v or 0) >= 2}
+    except (TypeError, ValueError):
+        locked = {}
+    if locked:
+        # 성공한 작업이어도 이미 고집스럽게 반복한 호출은 TTL까지 격리한 채 남긴다.
+        _write_guard(cfg, "", 0, 0, locked, float(data.get("updated") or time.time()))
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def parse_action(text: str) -> dict:
@@ -340,18 +389,26 @@ class Agent:
             ensure_ascii=False, sort_keys=True,
         )
 
-    def _repeat_keys(self, actions: list, recent: deque) -> list:
-        """반복 한도에 닿는 (도구, 인자) 키. 이번 배치 안의 중복도 함께 센다."""
+    @staticmethod
+    def _repeat_count(counts: Optional[dict], key: str) -> int:
+        try:
+            return int((counts or {}).get(key, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _repeat_keys(self, actions: list, recent: deque,
+                     repeat_counts: Optional[dict] = None) -> list:
+        """반복 한도에 닿거나 이전 작업에서 격리된 (도구, 인자) 키를 찾는다."""
         limit = int(getattr(self.cfg, "repeat_limit", 3) or 0)
-        if limit <= 0:
-            return []
         out, seen = [], {}
         for a in actions:
             key = self._call_key(a)
+            prior = self._repeat_count(repeat_counts, key)
             count = sum(1 for k in recent if k == key) + seen.get(key, 0) + 1
             seen[key] = seen.get(key, 0) + 1
-            if count >= limit and key not in out:
-                out.append(key)
+            if prior >= 2 or (limit > 0 and count >= limit):
+                if key not in out:
+                    out.append(key)
         return out
 
     @staticmethod
@@ -370,6 +427,8 @@ class Agent:
         name = f"'{tool}' " if tool else ""
         return (f"[시스템 지시] 같은 {name}호출을 인자까지 동일하게 반복해 같은 결과가 나왔다. "
                 "방금 그 호출은 실행하지 않았다. 즉시 인자·도구·가설을 바꿔라. "
+                "기다려야 한다면 `sleep 초; 확인명령`을 한 번만 쓰고, 결과가 같으면 "
+                "변화 없음으로 결론 내려 done 으로 답하라. "
                 "그리고 실패한 단계를 수정·재검증하기 전에 그 결과에 의존하는 뒷단계를 진행하지 마라. "
                 "같은 호출을 또 내면 작업이 중단된다.")
 
@@ -567,6 +626,53 @@ class Agent:
             for t in threads:
                 t.join()
 
+    def _final_report(self, stats, model, tier, step, t0, last_result=""):
+        """반복 가드가 한도에 닿았을 때 작업을 죽이지 않고 도구 없이 최종 보고를 받는다."""
+        self.progress.event(f"[{step}] 같은 호출 반복 한도 — 도구를 끄고 지금까지 결과로 마감")
+        self._fit_context()
+        turns = self.mem.turns
+        if turns and turns[-1].get("role") == "user" and isinstance(turns[-1].get("content"), str):
+            # 직전 교정 안내(user) 뒤에 user 메시지를 또 붙이면 일부 채팅 템플릿이
+            # 역할 교대 위반으로 거부한다 — 마지막 user 메시지에 이어 붙인다.
+            turns[-1]["content"] = turns[-1]["content"] + "\n\n" + WRAPUP_MSG
+        else:
+            self.mem.add("user", WRAPUP_MSG, stats)
+        answer = ""
+        try:
+            msgs, pii_map = (privacy.mask_messages(self.mem.messages())
+                             if self.mask_pii else (self.mem.messages(), None))
+            resp = self.llm.chat(msgs, model, stream=False, tools=None,
+                                 max_tokens=self._fit_max_tokens())
+            stats["llm_calls"] += 1
+            raw = resp.content or ""
+            if pii_map:
+                raw = privacy.restore(raw, pii_map)
+            raw = raw.strip()
+            stats["out_tokens"] += memory.estimate(raw)
+            if raw:
+                try:
+                    obj = json.loads(raw)
+                except ValueError:
+                    obj = None
+                if isinstance(obj, dict) and obj.get("done") and isinstance(obj.get("answer"), str):
+                    answer = obj["answer"].strip()
+                elif isinstance(obj, dict) and ("tool" in obj or "actions" in obj):
+                    answer = ""
+                else:
+                    answer = raw
+        except llm.LLMError as e:
+            log.warning("최종 보고 요청 실패: %s", e)
+        if not answer:
+            answer = "추가 확인 없이 지금까지의 결과로 보고합니다."
+            if last_result:
+                answer += "\n마지막 확인 결과:\n" + short(str(last_result), 400)
+        summary = (f"[{tier}/{model} · {step}스텝 · 도구{sum(stats['tools'].values())}회"
+                   f" · in~{stats['in_tokens']}tok/out~{stats['out_tokens']}tok"
+                   f" · {time.monotonic() - t0:.1f}s]")
+        _clear_guard(self.cfg)
+        return ("[중단] 같은 도구 호출이 반복되어 실행을 멈추고(교정 안내 무시) "
+                "지금까지 결과로 보고합니다.\n" + f"{summary}\n{answer}")
+
     def _run_action(self, action, step=1):
         batch = action.get("actions", [action])
         items = [(a["tool"], a.get("args", {})) for a in batch]
@@ -603,14 +709,16 @@ class Agent:
         if getattr(self, "instruction_files", None):
             self.progress.event("[지침] " + ", ".join(
                 os.path.basename(f) for f in self.instruction_files) + " 자동 로드됨")
+        violations, context_retries, repeat_nudges, task_switched = _load_guard_data(cfg, task)
         self.mem.add("user", task, stats)
+        if task_switched:
+            self.mem.add("user", TASK_SWITCH_MSG, stats)
         # 이전 세션의 미완료 계획이 있으면 컨텍스트에 다시 실어 이어받게 한다.
         plan = todos.load(cfg.workspace_root)
         if any(str(i.get("status") or "pending") != "done" for i in plan):
             self.mem.add("user", "[시스템 알림] 이어받는 작업 계획 — 미완료 단계가 남아 있다. "
                          "새 요청과 관련 있으면 todo_write 로 계속 갱신하고, 끝났으면 전부 done 으로 마감하라:\n"
                          + todos.render(plan), stats)
-        violations, context_retries, repeat_nudges = _load_guard(cfg, task)
         recent_calls: deque = deque(maxlen=20)
         last_results: dict = {}           # 키별 직전 실행 결과(안내에 되짚어 준다)
         steps_since_todo = 0              # todo_write 없이 지나간 단계 수
@@ -758,14 +866,24 @@ class Agent:
                     self.mem.add("user", REPAIR_MSG, stats)
                     continue
                 skipped = set()
-                for key in self._repeat_keys(actions, recent_calls):
-                    if repeat_nudges.get(key, 0) >= 2:
-                        self.progress.event(f"[{step}] 같은 도구 호출 반복 — 교정 안내 무시로 중단")
-                        return (f"[중단] 같은 도구 호출이 {cfg.repeat_limit}회 반복되었습니다"
-                                f"(교정 안내 무시): {key[:200]}")
-                    repeat_nudges[key] = repeat_nudges.get(key, 0) + 1
+                keys = {self._call_key(a) for a in actions}
+                exhausted_keys = [key for key in self._repeat_keys(actions, recent_calls, repeat_nudges)
+                                  if self._repeat_count(repeat_nudges, key) >= 2]
+                repeated = self._repeat_keys(actions, recent_calls, repeat_nudges)
+                exhausted_keys = [key for key in repeated
+                                  if self._repeat_count(repeat_nudges, key) >= 2]
+                for key in repeated:
+                    if self._repeat_count(repeat_nudges, key) >= 2:
+                        skipped.add(key)
+                        continue
+                    repeat_nudges[key] = self._repeat_count(repeat_nudges, key) + 1
                     skipped.add(key)
                     self.progress.event(f"[{step}] 같은 도구 호출 반복 감지 — 실행 생략, 교정 안내 주입")
+                if skipped == keys and exhausted_keys:
+                    key = exhausted_keys[0]
+                    self.progress.event(f"[{step}] 같은 도구 호출 반복 — 교정 안내 무시")
+                    return self._final_report(stats, model, tier, step, t0,
+                                              last_results.get(key, ""))
                 if skipped:
                     _save_guard(cfg, task, violations, context_retries, repeat_nudges)
                 for a in actions:
@@ -841,15 +959,22 @@ class Agent:
                 return f"{summary}\n{ans}"
 
             actions = action.get("actions") or [action]
-            repeated = self._repeat_keys(actions, recent_calls)
+            keys = {self._call_key(a) for a in actions}
+            repeated = self._repeat_keys(actions, recent_calls, repeat_nudges)
             if repeated:
-                key = repeated[0]
-                if repeat_nudges.get(key, 0) >= 2:
-                    self.progress.event(f"[{step}] 같은 도구 호출 반복 — 교정 안내 무시로 중단")
-                    return (f"[중단] 같은 도구 호출이 {cfg.repeat_limit}회 반복되었습니다"
-                            f"(교정 안내 무시): {key[:200]}")
-                repeat_nudges[key] = repeat_nudges.get(key, 0) + 1
+                skipped = set(repeated)
+                exhausted = [k for k in repeated
+                             if self._repeat_count(repeat_nudges, k) >= 2]
+                for key in repeated:
+                    prior = self._repeat_count(repeat_nudges, key)
+                    if prior < 2:
+                        repeat_nudges[key] = prior + 1
                 _save_guard(cfg, task, violations, context_retries, repeat_nudges)
+                if exhausted and set(repeated) == keys:
+                    key = exhausted[0]
+                    self.progress.event(f"[{step}] 같은 도구 호출 반복 — 교정 안내 무시")
+                    return self._final_report(stats, model, tier, step, t0,
+                                              last_results.get(key, ""))
                 for a in actions:
                     recent_calls.append(self._call_key(a))
                 for n in ([str(action.get("tool", ""))] if "tool" in action
@@ -857,12 +982,44 @@ class Agent:
                     stats["tools"][n] = stats["tools"].get(n, 0) + 1
                 self._emit_thought(step, action.get("thought", ""))
                 self.progress.event(f"[{step}] 같은 도구 호출 반복 감지 — 실행 생략, 교정 안내 주입")
-                tool_name = ", ".join(a.get("tool", "?") for a in actions)
+                skipped_names = sorted({a.get("tool", "?") for a in actions
+                                        if self._call_key(a) in skipped})
+                key = exhausted[0] if exhausted else repeated[0]
                 self.mem.add("user",
                              "[도구 결과] →\n<untrusted>\n"
                              + self._repeat_nudge(last_results.get(key, ""))
                              + "\n</untrusted>\n\n"
-                             + self._repeat_steer(tool_name), stats)
+                             + self._repeat_steer(", ".join(skipped_names)), stats)
+                valid = [a for a in actions if self._call_key(a) not in skipped]
+                if not valid:
+                    continue
+                if len(valid) == 1 and "tool" in action:
+                    valid_action = {"tool": valid[0]["tool"], "args": valid[0]["args"]}
+                else:
+                    valid_action = {"actions": valid}
+                obs = self._run_action(valid_action, step)
+                if "tool" in valid_action:
+                    last_results[self._call_key(valid[0])] = short(str(obs), 200)
+                else:
+                    for a in valid:
+                        last_results[self._call_key(a)] = short(str(obs), 200)
+                self.mem.add("user",
+                             f"[도구 결과] →\n<untrusted>\n{self._cap_output(obs)}\n</untrusted>",
+                             stats)
+                if "actions" in valid_action:
+                    batch = [{"tool": a.get("tool", ""), "args": a.get("args", {}) or {}}
+                             for a in valid_action["actions"]]
+                    triples = [("__batch__", {"actions": batch}, obs)]
+                else:
+                    triples = [(valid_action.get("tool", ""),
+                                valid_action.get("args", {}) or {}, obs)]
+                steer, abort = self._loop_feedback(triples)
+                if abort:
+                    return abort
+                if steer:
+                    self.mem.add("user", steer, stats)
+                steps_since_todo, todo_nudged = self._todo_tick(
+                    valid, steps_since_todo, todo_nudged)
                 continue
             for a in actions:
                 recent_calls.append(self._call_key(a))

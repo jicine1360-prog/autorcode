@@ -272,6 +272,23 @@ class TestAgentLoop(unittest.TestCase):
         self.assertIn("[중단]", out)
         self.assertIn("교정 안내 무시", out)
 
+    def test_repeat_exhausted_forces_final_report(self):
+        """반복 한도 소진 시 죽지 않고 도구를 끈 최종 보고로 마감한다."""
+        seen = {"tools_stripped": False}
+
+        def content(obs, b):
+            if "tools" not in b:
+                seen["tools_stripped"] = True
+                return '{"done": true, "answer": "지금까지 확인 결과 보고"}'
+            return json.dumps({"tool": "bash", "args": {"command": "echo XREPORT"}})
+
+        _Handler.content = staticmethod(content)
+        out = Agent(self._cfg(repeat_limit=3, max_iterations=10)).run("보고 확인")
+        self.assertIn("[중단]", out)
+        self.assertIn("교정 안내 무시", out)
+        self.assertIn("지금까지 확인 결과 보고", out)
+        self.assertTrue(seen["tools_stripped"])
+
     def test_self_copy_blocked_before_execution(self):
         """ssh 로 들어간 호스트 자신을 rsync/scp 하는 명령은 실행 전에 cp 로 차단."""
         a = Agent(self._cfg())
@@ -339,6 +356,139 @@ class TestAgentLoop(unittest.TestCase):
         self.assertNotIn("[중단]", out)
         self.assertEqual(n["nudged"], 2)
         self.assertEqual(n["steered"], 2)
+
+    def test_repeat_guard_survives_task_switch_native(self):
+        """이전 작업에서 격리된 네이티브 호출은 새 요청에서도 즉시 차단된다."""
+        from harness.agent_core import _save_guard, _task_sha
+        with tempfile.TemporaryDirectory() as d:
+            sess = os.path.join(d, "session.jsonl")
+            cfg = self._cfg(session_file=sess, repeat_limit=3, max_iterations=5)
+            args = json.dumps({"command": "echo CROSS"})
+            key = json.dumps({"tool": "bash", "args": {"command": "echo CROSS"}},
+                             ensure_ascii=False, sort_keys=True)
+            _save_guard(cfg, "구 작업", 0, 0, {key: 2})
+            modes = []
+
+            def content(obs, b):
+                modes.append("tools" in b)
+                if "tools" not in b:
+                    return '{"done": true, "answer":"전환 후 마감"}'
+                return {"content": "", "tool_calls": [{
+                    "id": "call_cross", "type": "function",
+                    "function": {"name": "bash", "arguments": args}}]}
+
+            _Handler.content = staticmethod(content)
+            out = Agent(cfg).run("새 요청")
+            self.assertIn("[중단]", out)
+            self.assertIn("교정 안내 무시", out)
+            self.assertIn("전환 후 마감", out)
+            self.assertEqual(modes, [True, False])
+            with open(sess + ".guard.json", encoding="utf-8") as fh:
+                guard = json.load(fh)
+            self.assertGreaterEqual(guard["repeat_nudges"][key], 2)
+            self.assertNotEqual(guard["task_sha"], _task_sha("새 요청"))
+
+    def test_repeat_guard_survives_successful_run(self):
+        """새 작업이 완료돼도 격리된 반복 호출은 TTL까지 유지된다."""
+        from harness.agent_core import _save_guard, _task_sha
+        with tempfile.TemporaryDirectory() as d:
+            sess = os.path.join(d, "session.jsonl")
+            cfg = self._cfg(session_file=sess, repeat_limit=3, max_iterations=4)
+            locked_key = json.dumps(
+                {"tool": "bash", "args": {"command": "echo QUARANTINED"}},
+                ensure_ascii=False, sort_keys=True)
+            _save_guard(cfg, "구 작업", 0, 0, {locked_key: 2})
+            seen = {}
+
+            def content(obs, b):
+                if not obs:
+                    seen["switch"] = any(
+                        "작업 전환" in str(m.get("content", ""))
+                        for m in b["messages"])
+                    return json.dumps({"tool": "bash",
+                                       "args": {"command": "echo NEW"}})
+                return '{"done": true, "answer":"새 작업 완료"}'
+
+            _Handler.content = staticmethod(content)
+            out = Agent(cfg).run("새 요청")
+            self.assertIn("새 작업 완료", out)
+            self.assertNotIn("[중단]", out)
+            self.assertTrue(seen["switch"])
+            with open(sess + ".guard.json", encoding="utf-8") as fh:
+                guard = json.load(fh)
+            self.assertGreaterEqual(guard["repeat_nudges"][locked_key], 2)
+            self.assertNotEqual(guard["task_sha"], _task_sha("새 요청"))
+
+    def test_repeat_guard_mixed_batch_continues_valid_json(self):
+        """격리된 호출과 새 호출이 한 배치에 섞이면 새 호출만 실행된다."""
+        from harness.agent_core import _save_guard, _task_sha
+        with tempfile.TemporaryDirectory() as d:
+            sess = os.path.join(d, "session.jsonl")
+            cfg = self._cfg(session_file=sess, native_tools=False,
+                            repeat_limit=3, max_iterations=3)
+            locked_key = json.dumps(
+                {"tool": "bash", "args": {"command": "echo OLD"}},
+                ensure_ascii=False, sort_keys=True)
+            _save_guard(cfg, "구 작업", 0, 0, {locked_key: 2})
+            seen = {}
+
+            def content(obs, b):
+                if obs:
+                    seen["result"] = any(
+                        "MIXED_OK" in str(m.get("content", ""))
+                        for m in b["messages"])
+                    return json.dumps({"done": True, "answer": "혼합 처리 완료"})
+                return json.dumps({"actions": [
+                    {"tool": "bash", "args": {"command": "echo OLD"}},
+                    {"tool": "bash", "args": {"command": "echo MIXED_OK"}},
+                ]})
+
+            _Handler.content = staticmethod(content)
+            out = Agent(cfg).run("새 요청")
+            self.assertIn("혼합 처리 완료", out)
+            self.assertNotIn("교정 안내 무시", out)
+            self.assertTrue(seen["result"])
+            with open(sess + ".guard.json", encoding="utf-8") as fh:
+                guard = json.load(fh)
+            self.assertGreaterEqual(guard["repeat_nudges"][locked_key], 2)
+            self.assertNotEqual(guard["task_sha"], _task_sha("새 요청"))
+
+    def test_repeat_guard_mixed_batch_continues_valid_native(self):
+        """네이티브 배치에서도 격리된 호출은 생략하고 새 호출만 실행한다."""
+        from harness.agent_core import _save_guard, _task_sha
+        with tempfile.TemporaryDirectory() as d:
+            sess = os.path.join(d, "session.jsonl")
+            cfg = self._cfg(session_file=sess, repeat_limit=3, max_iterations=3)
+            locked_key = json.dumps(
+                {"tool": "bash", "args": {"command": "echo OLD"}},
+                ensure_ascii=False, sort_keys=True)
+            _save_guard(cfg, "구 작업", 0, 0, {locked_key: 2})
+            seen = {}
+
+            def content(obs, b):
+                if obs:
+                    seen["result"] = any(
+                        "NATIVE_MIXED_OK" in str(m.get("content", ""))
+                        for m in b["messages"])
+                    return json.dumps({"done": True, "answer": "네이티브 혼합 완료"})
+                return {"content": "", "tool_calls": [
+                    {"id": "old", "type": "function", "function": {
+                        "name": "bash",
+                        "arguments": json.dumps({"command": "echo OLD"})}},
+                    {"id": "new", "type": "function", "function": {
+                        "name": "bash",
+                        "arguments": json.dumps({"command": "echo NATIVE_MIXED_OK"})}},
+                ]}
+
+            _Handler.content = staticmethod(content)
+            out = Agent(cfg).run("새 요청")
+            self.assertIn("네이티브 혼합 완료", out)
+            self.assertNotIn("교정 안내 무시", out)
+            self.assertTrue(seen["result"])
+            with open(sess + ".guard.json", encoding="utf-8") as fh:
+                guard = json.load(fh)
+            self.assertGreaterEqual(guard["repeat_nudges"][locked_key], 2)
+            self.assertNotEqual(guard["task_sha"], _task_sha("새 요청"))
 
 
 class TestLLMToolsFallback(unittest.TestCase):
