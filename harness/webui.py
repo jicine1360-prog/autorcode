@@ -221,7 +221,7 @@ form button { padding:10px 14px; border:1px solid #2f6f3f; border-radius:8px; ba
 <header>
   <div class="toprow">
     <div class="brand">autorcode web</div>
-    <div class="status" id="status">연결 전</div>
+    <div class="status" id="status" onclick="saveToken()" title="클릭하면 토큰을 다시 입력합니다">연결 전</div>
   </div>
   <div class="menubar" id="menubar">
     <button onclick="sendCmd('/help')">도움말</button>
@@ -250,8 +250,12 @@ form button { padding:10px 14px; border:1px solid #2f6f3f; border-radius:8px; ba
   <button type="submit">전송</button>
 </form>
 <script>
-const token = localStorage.getItem('autorcode_web_token') || new URLSearchParams(location.search).get('token') || prompt('autorcode web token');
+let token = localStorage.getItem('autorcode_web_token') || new URLSearchParams(location.search).get('token') || '';
 if (token) localStorage.setItem('autorcode_web_token', token);
+function saveToken(){
+  const v = prompt('autorcode web token', token || '');
+  if(v && v.trim()){ token = v.trim(); localStorage.setItem('autorcode_web_token', token); }
+}
 
 const logEl = document.getElementById('log');
 const statusEl = document.getElementById('status');
@@ -318,7 +322,16 @@ function connect(){
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(proto + '//' + location.host + '/ws?token=' + encodeURIComponent(token || ''));
   ws.onopen = ()=> statusEl.textContent = '연결됨';
-  ws.onclose = ()=> { statusEl.textContent = '연결 끊김'; setTimeout(connect, 1500); };
+  ws.onclose = (e)=> {
+    if(e.code === 4401){
+      localStorage.removeItem('autorcode_web_token'); token='';
+      statusEl.textContent = '토큰 오류 — 클릭해 입력';
+      add('event', '[인증] 토큰이 일치하지 않습니다. 상태표를 눌러 다시 입력하세요.');
+    } else {
+      statusEl.textContent = '연결 끊김 — 재시도 중';
+    }
+    setTimeout(connect, 1500);
+  };
   ws.onmessage = (e)=>{
     const m = JSON.parse(e.data);
     if(m.type === 'ready'){ add('event', 'ready · ' + m.model + ' · ' + m.workspace); }

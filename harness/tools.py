@@ -806,6 +806,44 @@ def _subagent(args: Args, root: str, max_output: int, timeout: int) -> str:
                           for i, (t, r) in enumerate(zip(tasks, results))), max_output)
 
 
+def run_omp(task: str, root: str, timeout: int) -> str:
+    """omp 코딩 하네스 headless 실행 — 폰(chat)별로 세션을 나눠 이어간다.
+
+    --session-dir 을 chat 단위로 분리한 --continue 라서, 같은 폰의 다음 작업은
+    PC 쪽에서 이전 세션의 파악 내용을 그대로 안다. 하네스는 자체 yolo 로
+    돌므로 봇 승인 게이트를 별도 통과시키지 않는다(봇과 같은 신뢰 경계).
+    """
+    binary = os.path.expanduser(os.getenv("AUTORCODE_OMP_BIN", "~/.local/bin/omp"))
+    if not os.path.exists(binary):
+        return f"[오류] omp 바이너리 없음: {binary} (AUTORCODE_OMP_BIN 으로 지정)"
+    sdir = os.path.join(os.path.expanduser(os.getenv(
+        "AUTORCODE_OMP_SESSION_DIR", "~/.autorcode/omp-sessions")), notes.chat() or "shared")
+    os.makedirs(sdir, exist_ok=True)
+    cmd = [binary, "-p", "--no-title", "--continue",
+           "--cwd", root, "--session-dir", sdir,
+           "--max-time", f"{max(60, int(timeout))}s", task]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=int(timeout) + 60, cwd=root)
+    except subprocess.TimeoutExpired:
+        return f"[omp 타임아웃 {timeout}s]"
+    except Exception as e:
+        return f"[omp 오류] {type(e).__name__}: {e}"
+    out = (p.stdout or "").strip()
+    if p.returncode != 0:
+        return (f"[omp exit {p.returncode}] "
+                f"{(out or (p.stderr or '').strip()[-300:] or '출력 없음')}")
+    return out or "[출력 없음]"
+
+
+def _omp(args: Args, root: str, max_output: int, timeout: int) -> str:
+    task = str(args.get("task") or "").strip()
+    if not task:
+        return "[오류] task 필수"
+    tmo = int(args.get("timeout") or os.getenv("AUTORCODE_OMP_TIMEOUT", "900"))
+    return _cap(run_omp(task, root, tmo), max_output)
+
+
 TOOLS: Dict[str, ToolFn] = {
     "bash": _bash,
     "system_info": _system_info,
@@ -819,6 +857,7 @@ TOOLS: Dict[str, ToolFn] = {
     "rollback": _rollback,
     "list_dir": _list_dir,
     "subagent": _subagent,
+    "omp_harness": _omp,
     "find_files": _find_files,
     "disk_usage": _disk_usage,
     "grep_files": _grep_files,
@@ -858,6 +897,7 @@ SCHEMAS = {
     "rollback": "args: {checkpoint?:str} — write_file/edit_file 실행 전 상태로 복원 ('last' 또는 체크포인트 id, 생략 시 마지막). 없었던 파일은 삭제됨. 롤백 자체는 되돌리기 불가",
     "list_dir": "args: {path?:str} — 디렉터리 목록",
     "subagent": "args: {task:str, tasks?:[str], model?:str, timeout?:int} — 독립 autorcode 인스턴스에 작업 위임(tasks 여러 개면 병렬). 서브는 자동승인으로 돌고 최종 답변만 돌려준다. 긴 작업·병렬 조사용",
+    "omp_harness": "args: {task:str, timeout?:int} — PC의 omp 코딩 하네스에 작업 위임(파일·셸·전체 코드베이스 자유, 기본 타임아웃 900초). 폰별 세션이 유지되어 이전 작업 맥락을 이어간다. 코드 작성·수정, repo 조사, 장기 실행 빌드 등 PC 작업에 사용",
     "grep_files": "args: {pattern:str, path?:str, max_matches?:int} — 정규식 내용 검색",
     "system_info": "args: {section?:'all'|'host'|'cpu'|'mem'|'gpu'|'models'|'disk'} — 지금 실행 중인 기기의 라이브 상태(CPU/RAM/GPU VRAM/상주 모델/디스크). 설치 목록이 아니라 구동 중 값",
     "service_status": "args: {state?:'all'|'active'|'failed'|'inactive'} — 서버의 사용자 서비스 상태 조회 (읽기 전용)",

@@ -35,6 +35,7 @@ from .notes import chat as mem_chat
 from .notes import load_for, scope as mem_scope
 from .progress import Progress
 from .telegram import CONFIG_PATH, collect_status
+from .tools import run_omp
 
 log = logging.getLogger("agent.bot")
 
@@ -48,7 +49,9 @@ HELP = (
     "명령이 아닌 텍스트는 전부 작업 지시로 실행됩니다.\n"
     "/status  서버 상태 요약\n"
     "/report  일일 리포트 전송\n"
+    "/omp     PC 코딩 하네스(omp)에 바로 지시 — 예: /omp ~/proj 빌드 고쳐줘\n"
     "/help    이 도움말\n\n"
+    "코드 작성·수정·repo 조사 같은 PC 작업은 알아서 omp 하네스로 위임돼요.\n\n"
     "민감한 명령은 여기서 승인/거부 버튼을 눌러 결정하고,\n"
     "거부하면 실행되지 않습니다.\n\n"
     "'근처/주변'은 내 위치 기준으로 알려드려요.\n"
@@ -315,6 +318,20 @@ class Bot:
         if cmd in ("/status", "/report"):
             self.send(chat_id, collect_status())
             return
+        if cmd == "/omp":
+            rest = text[len(cmd):].strip()
+            if not rest:
+                self.send(chat_id, "사용법: /omp <작업> — PC의 코딩 하네스(omp)에 바로 지시해요. "
+                                   "같은 폰의 이전 harness 대화 맥락을 이어갑니다.")
+                return
+            with self._lock:
+                if self._busy:
+                    self.send(chat_id, "이미 작업 중입니다. 하나씩만 받을 수 있어요 — 끝나면 다시 보내주세요.")
+                    return
+                self._busy = True
+            threading.Thread(target=self._work_omp, args=(chat_id, rest),
+                             daemon=True, name="tg-omp").start()
+            return
 
         if loc.load(chat_id) is None and self._loc_intent(text):
             self._pending[str(chat_id)] = text
@@ -435,6 +452,24 @@ class Bot:
                 self._busy = False
             if self._gate is not None:
                 self._gate.current_chat = None
+
+    def _work_omp(self, chat_id: int, text: str) -> None:
+        """/omp — 폰 비서 agent 루프 없이 omp 하네스에 지시를 그대로 넘긴다.
+
+        세션은 run_omp 가 chat 별로 분리해서 유지한다(mem_scope 가 키가 된다).
+        """
+        timeout = int(os.getenv("AUTORCODE_OMP_TIMEOUT", "900"))
+        try:
+            with mem_scope(str(chat_id)):
+                self.send(chat_id, f"harness 작업 시작 🤖 ({len(text)}자)")
+                result = run_omp(text, self._workspace, timeout)
+            self.send(chat_id, result or "완료 (결과 없음)")
+        except Exception as e:
+            log.exception("harness 작업 실패 (chat %s)", chat_id)
+            self.send(chat_id, f"작업 중 오류: {str(e)[:_TEXT_LIMIT]}")
+        finally:
+            with self._lock:
+                self._busy = False
 
     def _default_agent(self) -> Agent:
         """전화 작업 기본 에이전트.
