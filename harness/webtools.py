@@ -91,6 +91,35 @@ def _ddg_parse(raw: bytes) -> list:
     return uniq
 
 
+def _bing_parse(raw: bytes) -> list:
+    import base64
+    txt = raw.decode("utf-8", "replace")
+    out = []
+    # bing 레이아웃(2026-11 실측): <li class="b_algo" ...><link.../>...<h2><a href="/ck/a?!..u=a1<url-safe-b64>">
+    for block in re.finditer(r'<li class="b_algo".*?</li>', txt, re.S):
+        m = re.search(r"<h2[^>]*>\s*<a[^>]+href=\"([^\"]+)\"[^>]*>(.*?)</a>", block.group(0), re.S)
+        if not m:
+            continue
+        url = _html.unescape(m.group(1))
+        if "/ck/a" in url:  # 리다이렉트 래퍼 → u=a1<base64> 원본 복원
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            wrapped = q.get("u", [""])[0]
+            if wrapped.startswith("a1"):
+                try:
+                    url = base64.urlsafe_b64decode(wrapped[2:] + "=" * (-len(wrapped[2:]) % 4)).decode("utf-8", "replace")
+                except Exception:
+                    pass
+        title = _html.unescape(re.sub(r"<[^>]+>", "", m.group(2))).strip()
+        if title and url.startswith("http"):
+            out.append({"title": title[:120], "url": url})
+    seen, uniq = set(), []
+    for r in out:
+        if r["url"] not in seen:
+            seen.add(r["url"])
+            uniq.append(r)
+    return uniq
+
+
 def _web_search(args, root, max_output, timeout):
     query = str(args.get("query", "")).strip()
     if not query:
@@ -98,10 +127,14 @@ def _web_search(args, root, max_output, timeout):
     limit = int(args.get("max_results") or 8)
     tmo = min(timeout, 20)
     last_err = None
-    for base in ("https://lite.duckduckgo.com/lite/?q=", "https://html.duckduckgo.com/html/?q="):
+    # ddg는 데이터센터 IP를 'anomaly'로 차단하는 일이 잦다 — bing을 3순위 폴백으로 둔다.
+    engines = (("https://lite.duckduckgo.com/lite/?q=", _ddg_parse),
+               ("https://html.duckduckgo.com/html/?q=", _ddg_parse),
+               ("https://www.bing.com/search?setlang=ko&q=", _bing_parse))
+    for base, parser in engines:
         try:
             raw = _get(base + urllib.parse.quote(query), tmo)
-            results = _ddg_parse(raw)[:limit]
+            results = parser(raw)[:limit]
             if results:
                 lines = [f"{i+1}. {r['title']}\n   {r['url']}" for i, r in enumerate(results)]
                 return _cap("\n".join(lines), max_output)
