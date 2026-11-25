@@ -201,7 +201,10 @@ class OpenAICompatibleLLM:
                 break
             event = json.loads(data)
             if event.get("error"):
-                raise LLMError("모델 서버가 스트림 오류를 반환했습니다")
+                err = event["error"]
+                detail = (err.get("message") or err.get("type") or "") if isinstance(err, dict) else str(err)
+                raise LLMError("모델 서버가 스트림 오류를 반환했습니다"
+                               + (f": {detail}" if detail else ""))
             choices = event.get("choices") or []
             if not choices:
                 continue
