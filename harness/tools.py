@@ -738,7 +738,7 @@ def _system_info(args, root, max_output, timeout):
             try:
                 l1, l5, l15 = os.getloadavg()
                 load = f"  부하(1/5/15분) {l1:.2f} / {l5:.2f} / {l15:.2f}"
-            except OSError:
+            except (OSError, AttributeError):
                 load = ""
             out.append(f"[CPU]   {model}  ×{cores} 코어{load}")
 
