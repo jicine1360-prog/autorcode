@@ -291,11 +291,30 @@ def _disk_usage(args: Args, root: str, max_output: int, timeout: int) -> str:
     return _cap("\n".join(lines), max_output)
 
 
+def _ps_table(script: str, max_output: int, timeout: int) -> str:
+    """Windows PowerShell one-liner 실행 → stdout 테이블."""
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=min(timeout, 20))
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"[오류] PowerShell 실행 실패: {e}"
+    return _cap((r.stdout or r.stderr or "(출력 없음)").strip(), max_output)
+
+
 def _service_status(args: Args, root: str, max_output: int, timeout: int) -> str:
     """현재 사용자 세션의 서비스 상태만 읽는다."""
     state = str(args.get("state") or "all").lower()
     if state not in {"all", "active", "failed", "inactive"}:
         return "[오류] state는 all/active/failed/inactive 중 하나여야 합니다"
+    if os.name == "nt":
+        ps = ("Get-Service | Where-Object {$_.StartType -ne 'Manual' -and $_.StartType -ne 'Disabled'} | "
+              "ForEach-Object { $_.Name + ' ' + $_.StartType + ' ' + $_.Status }")
+        if state != "all":
+            ps = ("Get-Service | ForEach-Object { $_.Name + ' ' + $_.StartType + ' ' + $_.Status } | "
+                  "Select-String -Pattern ' " + {"active": "Running", "inactive": "Stopped",
+                  "failed": "Stopped"}.get(state, "") + "$'")
+        return _ps_table(ps, max_output, timeout)
     exe = shutil.which("systemctl")
     if not exe:
         return "[오류] systemctl 없음"
@@ -317,6 +336,11 @@ def _process_list(args: Args, root: str, max_output: int, timeout: int) -> str:
         limit = max(1, min(int(args.get("limit") or 15), 30))
     except (TypeError, ValueError):
         return "[오류] limit은 정수여야 합니다"
+    if os.name == "nt":
+        return _ps_table(
+            f"Get-Process | Sort-Object CPU -Descending | Select-Object -First {limit} "
+            "| ForEach-Object { \"$($_.Id) `$($_.ProcessName) CPU=$([math]::Round($_.CPU,1))s "
+            "MEM=$([math]::Round($_.WorkingSet64/1MB))MB\" }", max_output, timeout)
     ps = shutil.which("ps")
     if not ps:
         return "[오류] ps 없음"
@@ -339,6 +363,13 @@ def _service_logs(args: Args, root: str, max_output: int, timeout: int) -> str:
         lines = max(1, min(int(args.get("lines") or 50), 200))
     except (TypeError, ValueError):
         return "[오류] lines는 정수여야 합니다"
+    if os.name == "nt":
+        name = service[: -len(".service")]
+        return _ps_table(
+            f"Get-WinEvent -FilterHashtable @{{LogName='Application';MaxEvents={lines}}} "
+            f"-ErrorAction SilentlyContinue | ForEach-Object {{ \"$($_.TimeCreated) [$($_.LevelDisplayName)] "
+            f"`$($_.ProviderName): $($_.Message.Substring(0,[Math]::Min(160,$_.Message.Length)))\" }}",
+            max_output, timeout)
     exe = shutil.which("journalctl")
     if not exe:
         return "[오류] journalctl 없음"
