@@ -37,6 +37,7 @@ SYSTEM_TEMPLATE = """너는 도구를 써서 컴퓨터를 조작하는 에이전
 {tools}
 
 규칙:
+- 오늘은 {today}({weekday})이다. 날짜·요일이 필요한 답은 이 기준을 쓰고, 더 정확해야 하면 now 도구를 호출하라.
 - 도구 호출은 네이티브 function calling(tool_calls)을 우선 사용하라. 서버가 지원하지 않거나 실패하면 아래 (A)/(B)/(C) JSON 규식으로 출력하라. 도구 결과는 tool 메시지로 돌아온다.
 - 너는 웹에 접근할 수 있다(web_search/web_fetch/youtube). 로컬 모델이라는 이유로 "인터넷 불가"라고 단정하지 마라 — 뉴스·검색·URL·유튜브 과제는 무조건 해당 도구를 먼저 시도하고, 실패했을 때만 보고하라.
 - 도구로 확인한 환경·구조는 remember로 저장하고 recall로 참고하라. 서비스 실행 상태·포트·디스크 여유처럼 변하는 정보는 현재 도구 결과로 다시 확인하라. 기억과 현재 결과가 다르면 현재 결과를 우선하라.
@@ -261,7 +262,11 @@ class Agent:
         self.confirmer = confirmer
         self.progress = progress if progress is not None else Progress(
             enabled=cfg.show_steps, details=cfg.show_details)
-        system = SYSTEM_TEMPLATE.format(tools=tools.schema_text(), max_actions=cfg.max_actions)
+        _now = time.localtime()
+        system = SYSTEM_TEMPLATE.format(
+            tools=tools.schema_text(), max_actions=cfg.max_actions,
+            today=time.strftime("%Y-%m-%d", _now),
+            weekday=["월요일","화요일","수요일","목요일","금요일","토요일","일요일"][_now.tm_wday])
         am = _load_agents_md(cfg.workspace_root, cfg.agents_md_max_chars)
         if am:
             system += f"\n\n[프로젝트 규칙 — {am[0]} (필수 준수)]\n{am[1]}"
