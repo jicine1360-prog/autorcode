@@ -38,11 +38,46 @@ def _cap(text: str, limit: int) -> str:
     return cap_middle(text, limit)
 
 
+class _WinMemDone(Exception):
+    """Windows 메모리 섹션이 posix /proc 경로를 타지 않고 끝나도록 하는 신호."""
+
+
+def _bash_windows(cmd: str, root: str, max_output: int, timeout: int) -> str:
+    """Windows 명령 실행 — killpg/SIGKILL 없는 환경이라 taskkill /T 로 트리 종결."""
+    shell = os.environ.get("COMSPEC", "cmd.exe")
+    with subprocess.Popen([shell, "/d", "/c", cmd], cwd=root,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, encoding="utf-8", errors="replace") as proc:
+        try:
+            out, err = proc.communicate(timeout=max(0.1, timeout))
+        except subprocess.TimeoutExpired:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True)
+            try:
+                out, err = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                out, err = proc.communicate()
+            err = (err or "") + "\n[TIMEOUT] 명령이 타임아웃으로 강제 종료됨"
+        except BaseException:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True)
+            proc.communicate()
+            raise
+    out = out or ""
+    if err:
+        out += ("\n" if out else "") + "[stderr]\n" + err
+    return _cap(f"[exit={proc.returncode}]\n{out or '(출력 없음)'}", max_output)
+
+
 def _bash(args, root, max_output, timeout):
     cmd = str(args.get("command", ""))
     safety.check_bash(cmd)
     import signal
     from .config import load
+
+    if os.name == "nt":
+        return _bash_windows(cmd, root, max_output, timeout)
 
     cfg = load()
     limits = [max(1, min(timeout, cfg.rlimit_cpu)), cfg.rlimit_mem_mb * 2**20,
@@ -641,8 +676,12 @@ def _system_info(args, root, max_output, timeout):
 
     if secs in ("all", "host"):
         try:
-            un = os.uname()
-            out.append(f"[호스트] {socket.gethostname()}  {un.sysname} {un.release}  {un.machine}")
+            if os.name == "nt":
+                import platform as _pl
+                out.append(f"[호스트] {socket.gethostname()}  {_pl.system()} {_pl.release()}  {_pl.machine()}")
+            else:
+                un = os.uname()
+                out.append(f"[호스트] {socket.gethostname()}  {un.sysname} {un.release}  {un.machine}")
             boot = _boot_elapsed()
             if boot:
                 out.append(f"        가동 {boot}")
@@ -650,25 +689,47 @@ def _system_info(args, root, max_output, timeout):
             out.append(f"[호스트] 조회 실패: {e}")
 
     if secs in ("all", "cpu"):
-        model, cores = "(알 수 없음)", 0
-        try:
-            with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    if line.startswith("model name") and model == "(알 수 없음)":
-                        model = line.split(":", 1)[1].strip()
-                    if line.startswith("processor"):
-                        cores += 1
-        except OSError as e:
-            model = f"조회 실패: {e}"
-        try:
-            l1, l5, l15 = os.getloadavg()
-            load = f"  부하(1/5/15분) {l1:.2f} / {l5:.2f} / {l15:.2f}"
-        except OSError:
-            load = ""
-        out.append(f"[CPU]   {model}  ×{cores} 코어{load}")
+        if os.name == "nt":
+            model = os.environ.get("PROCESSOR_IDENTIFIER", "(알 수 없음)").strip()
+            cores = os.cpu_count() or 0
+            out.append(f"[CPU]   {model}  ×{cores} 논리코어")
+        else:
+            model, cores = "(알 수 없음)", 0
+            try:
+                with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        if line.startswith("model name") and model == "(알 수 없음)":
+                            model = line.split(":", 1)[1].strip()
+                        if line.startswith("processor"):
+                            cores += 1
+            except OSError as e:
+                model = f"조회 실패: {e}"
+            try:
+                l1, l5, l15 = os.getloadavg()
+                load = f"  부하(1/5/15분) {l1:.2f} / {l5:.2f} / {l15:.2f}"
+            except OSError:
+                load = ""
+            out.append(f"[CPU]   {model}  ×{cores} 코어{load}")
 
     if secs in ("all", "mem"):
         try:
+            if os.name == "nt":
+                import ctypes
+
+                class _MSX(ctypes.Structure):
+                    _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                                ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                                ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                                ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                                ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+                ms = _MSX(); ms.dwLength = ctypes.sizeof(_MSX)
+                if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms)):
+                    tot, avail = ms.ullTotalPhys >> 20, ms.ullAvailPhys >> 20
+                    used = tot - avail
+                    out.append(f"[메모리] {used:,} / {tot:,} MiB 사용 ({used / tot * 100:.0f}%)")
+                    raise _WinMemDone
+                out.append("[메모리] 조회 실패: GlobalMemoryStatusEx")
+                raise _WinMemDone
             info: dict[str, int] = {}
             with open("/proc/meminfo", encoding="utf-8") as f:
                 for line in f:
@@ -681,6 +742,8 @@ def _system_info(args, root, max_output, timeout):
             sw = info.get("SwapTotal", 0) // 1024
             pct = (used / tot * 100) if tot else 0
             out.append(f"[메모리] {used:,} / {tot:,} MiB 사용 ({pct:.0f}%), 스왑 {sw:,} MiB")
+        except _WinMemDone:
+            pass
         except (OSError, ValueError, IndexError) as e:
             out.append(f"[메모리] 조회 실패: {e}")
 
@@ -692,7 +755,8 @@ def _system_info(args, root, max_output, timeout):
         out.append(f"[모델]  {_live_models(tmo)}")
 
     if secs in ("all", "disk"):
-        for target in ("/", os.path.expanduser("~")):
+        _root_drive = os.environ.get("SystemDrive", "C:") + "\\" if os.name == "nt" else "/"
+        for target in (_root_drive, os.path.expanduser("~")):
             try:
                 u = shutil.disk_usage(target)
                 used = u.total - u.free
@@ -709,9 +773,13 @@ _SYS_SECTIONS = ("all", "host", "cpu", "mem", "gpu", "models", "disk")
 
 def _boot_elapsed() -> str:
     try:
-        with open("/proc/uptime", encoding="ascii") as f:
-            up = float(f.read().split()[0])
-    except (OSError, ValueError, IndexError):
+        if os.name == "nt":
+            import ctypes
+            up = ctypes.windll.kernel32.GetTickCount64() / 1000.0
+        else:
+            with open("/proc/uptime", encoding="ascii") as f:
+                up = float(f.read().split()[0])
+    except (OSError, ValueError, IndexError, AttributeError):
         return ""
     d, rem = divmod(int(up), 86400)
     h, rem = divmod(rem, 3600)
