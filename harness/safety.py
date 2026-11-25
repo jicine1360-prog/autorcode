@@ -67,7 +67,10 @@ def confine(path: str, root: str, for_write: bool = False) -> str:
     path = os.path.expanduser(path or ".")
     joined = path if os.path.isabs(path) else os.path.join(root, path)
     real = os.path.realpath(joined)
-    if real != root and not real.startswith(root + os.sep):
+    # 드라이브 루트(C:\)는 말미 구분자가 이미 있어 root+sep이 'C:\\'가 되어
+    # 모든 자식 경로가 거부되는 버그 — 말미 구분자 중복 없이 접두어를 만든다.
+    prefix = root if root.endswith((os.sep, "/")) else root + os.sep
+    if real != root and not real.startswith(prefix):
         raise UnsafeCommand(f"샌드박스 밖 접근 거부: {path} (루트: {root})")
     if for_write and real == root:
         raise UnsafeCommand("작업 루트 자체를 쓸 수 없음")
